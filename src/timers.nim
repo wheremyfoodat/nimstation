@@ -91,12 +91,21 @@ proc tick_timers*() =
         pend_irq(1, Interrupt.Timer2)
         timers[2].interrupt = true
 
-    #if timers[2].target_wrap:
-    #    timers[2].counter = 0
+    if timers[2].target_wrap:
+        timers[2].counter = 0
+        timers[2].interrupt = false
+
+    if timers[2].counter == 0xFFFF'u16:
+        if timers[2].wrap_irq:
+            pend_irq(1, Interrupt.Timer2)
+        timers[2].counter = 0'u16
+        timers[2].interrupt = false
+        timers[2].overflow_reached = false
+        timers[2].target_reached = false
 
 proc timers_load32*(offset: uint32): uint32 =
     let instance = offset shr 4
-    echo "Timer", instance, " load32"
+    #echo "Timer", instance, " load32"
     case offset and 0xF:
         of 0: return uint32(timers[instance].counter)
         of 4: return uint32(timer_mode(timers[instance]))
@@ -122,4 +131,8 @@ proc timers_store16*(offset: uint32, value: uint16) =
         of 8:
             echo "Set timer", instance, " target to ", value.toHex()
             timers[instance].target = value
+            timers[instance].target_reached = false
+            timers[instance].overflow_reached = false
+            timers[instance].interrupt = false
+            timers[instance].counter = 0'u16
         else: quit("Unhandled timer register read " & (offset and 0xF).toHex(), QuitSuccess)

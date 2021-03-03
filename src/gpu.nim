@@ -285,7 +285,8 @@ proc tick_gpu*() =
     let vblank_int = (display_line < display_line_start) or (display_line >= display_line_end)
 
     if (not vblank_interrupt) and vblank_int:
-        pend_irq(1, Interrupt.VBlank)
+        discard
+        #pend_irq(30, Interrupt.VBlank)
 
     if vblank_interrupt and (not vblank_int):
         frame_counter += 1

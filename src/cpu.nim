@@ -1,5 +1,7 @@
-import strutils
-import bus, interrupt, timers, counters
+import strutils, os
+import bus, interrupt, timers, counters, cdrom
+
+#enableProfiling()
 
 const PROCESSOR_ID = 0x00000002'u32
 
@@ -764,7 +766,7 @@ proc run_next_instruction*() =
         pc = bus_sideload(sideload_file)
         next_pc = pc + 4
         sideload = false
-    elif (pc == 0x80030000'u32) and fastboot and (not branch_bool):
+    elif (pc == 0x80030000'u32) and fastboot: #and (not branch_bool):
         echo "Fastbooting!"
         pc = regs[31]
         next_pc = pc + 4
@@ -779,8 +781,9 @@ proc run_next_instruction*() =
 
     current_instruction = load32(pc)
 
-    if timer_debug:
+    if cd_debug:
         echo pc.toHex(), " ", current_instruction.toHex()
+        sleep(100)
 
     pc = next_pc
     next_pc = pc + 4'u32
@@ -790,7 +793,8 @@ proc run_next_instruction*() =
 
     cycle_count += 1
     if (cycle_count mod 8) == 0:
-        tick_timers()
+        discard
+        #tick_timers()
 
     if cop0_irq_active():
         echo "Running interrupt"

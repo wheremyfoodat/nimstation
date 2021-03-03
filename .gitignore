@@ -2,6 +2,7 @@ nimcache/
 nimblecache/
 htmldocs/
 exes/
+games/
 *.BIN
 *.exe
 *.PDF

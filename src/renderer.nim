@@ -13,7 +13,6 @@ var context = window.glCreateContext()
 loadExtensions()
 glClearColor(0.0, 0.0, 0.0, 1.0)
 glClearDepth(1.0)
-#glEnable(GL_DEPTH_TEST)
 glMatrixMode(GL_PROJECTION)
 gluOrtho2D(0.0, 1024.0, 512.0, 0.0)
 glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT)
@@ -47,8 +46,6 @@ proc draw_vram() =
             let b = float32((pixel shr 7) and 0xF8) / 255'f32
             let xpos = cast[GLint](x)
             let ypos = cast[GLint](y)
-            #let xpos = (float32(cast[uint32](x_start) + x_pos) / 512'f32) - 1.0
-            #let ypos = 1.0 - (float32(cast[uint32](y_start) + y_pos) / 256'f32)
             glColor3f(r, g, b)
             glVertex2i(xpos, ypos)
     glEnd()
@@ -87,13 +84,13 @@ proc get_texel_4bit(x: uint32, y: uint32, clutx: uint32, cluty: uint32, pagex: u
     let index = (texel shr ((x mod 4) * 4)) and 0xF
     return vram[cluty][clutx + index]
 
-proc get_texel_8bit(x: uint32, y: uint32): uint16 =
-    let texel = vram[page_y + y][page_x + (x div 2)]
+proc get_texel_8bit(x: uint32, y: uint32, clutx: uint32, cluty: uint32, pagex: uint32, pagey: uint32): uint16 =
+    let texel = vram[pagey + y][pagex + (x div 2)]
     let index = (texel shr ((x mod 2) * 4)) and 0xFF
-    return vram[clut_y][clut_x + index]
+    return vram[cluty][clutx + index]
 
-proc get_texel_16bit(x: uint32, y: uint32): uint16 =
-    return vram[page_y + y][page_x + x]
+proc get_texel_16bit(x: uint32, y: uint32, clutx: uint32, cluty: uint32, pagex: uint32, pagey: uint32): uint16 =
+    return vram[pagey + y][pagex + x]
 
 proc draw_textures() =
     glBegin(GL_POINTS)
@@ -112,8 +109,8 @@ proc draw_textures() =
             for x_pos in 0'u16 ..< xlen:
                 let pixel = case texture_depth:
                     of 0: get_texel_4bit(x_pos, y_pos, clutx, cluty, pagex, pagey)
-                    of 1: get_texel_8bit(x_pos, y_pos)
-                    of 2: get_texel_16bit(x_pos, y_pos)
+                    of 1: get_texel_8bit(x_pos, y_pos, clutx, cluty, pagex, pagey)
+                    of 2: get_texel_16bit(x_pos, y_pos, clutx, cluty, pagex, pagey)
                     else: 0x00'u16
 
                 let r = float32((pixel shl 3) and 0xF8) / 255'f32
@@ -121,8 +118,6 @@ proc draw_textures() =
                 let b = float32((pixel shr 7) and 0xF8) / 255'f32
                 let xpos = cast[GLint](cast[uint16](x_start) + x_pos)
                 let ypos = cast[GLint](cast[uint16](y_start) + y_pos)
-                #let xpos = (float32(cast[uint32](x_start) + x_pos) / 512'f32) - 1.0
-                #let ypos = 1.0 - (float32(cast[uint32](y_start) + y_pos) / 256'f32)
                 if pixel != 0:
                     glColor4f(r, g, b, a)
                     glVertex2i(xpos, ypos)
@@ -141,12 +136,8 @@ proc render_frame*() =
         glBegin(GL_TRIANGLES)
         let num = nvertices div 3
         for i in (0 ..< num):
-            # if i > VERTEX_BUFFER_LEN:
-            #     break
             for j in countup(0, 2):
                 let vertice = vertices[(i*3) + uint32(j)]
-                #let xpos = (vertice[3] / 512) - 1.0
-                #let ypos = 1.0 - (vertice[4] / 256)
                 let xpos = vertice[3]
                 let ypos = vertice[4]
                 glColor3f(float32(vertice[0]) / 255'f32, float32(vertice[1]) / 255'f32, float32(vertice[2]) / 255'f32)

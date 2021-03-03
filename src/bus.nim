@@ -276,6 +276,7 @@ proc do_dma_block(channel: Channel, port_num: uint32) =
                             of 1: 0xFFFFFF'u32
                             else: (address - 4) and 0x1FFFFFF'u32
                     of Port.Gpu: 0x00'u32
+                    of Port.CdRom: cdrom_dma_read_word()
                     else: quit("Unhandled DMA source port " & ord(port).toHex(), QuitSuccess)
                 ram_store32(cur_addr, src_word)
         address = address + cast[uint32](increment)
