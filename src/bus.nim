@@ -1,5 +1,5 @@
 import streams, strutils
-import gpu, cdrom, interrupt, timers
+import cdrom, interrupt, timers
 
 const REGION_MASK = [0xFFFFFFFF'u32, 0xFFFFFFFF'u32, 0xFFFFFFFF'u32, 0xFFFFFFFF'u32, 0x7FFFFFFF'u32, 0x1FFFFFFF'u32, 0xFFFFFFFF'u32, 0xFFFFFFFF'u32]
 
@@ -59,6 +59,16 @@ var s = newFileStream("SCPH1001.BIN", fmRead)
 while not s.atEnd:
     bios[bios_pos] = s.readChar()
     bios_pos += 1
+
+proc dump_wram*() =
+    echo "Dumping wram!"
+    var s = newFileStream("wram.bin", fmWrite)
+    for x in ram:
+      s.write(x)
+    s.close()
+    echo "Done!"
+
+import gpu
 
 proc bus_sideload*(sideload_file: string): uint32 =
     echo "Sideloading ", sideload_file
@@ -252,7 +262,7 @@ proc channel_done(channel: Channel, port: uint32) =
         pend_irq(1, Interrupt.Dma)
 
 proc do_dma_block(channel: Channel, port_num: uint32) =
-    echo "Starting block DMA"
+
     let port = port_from_index(port_num)
     let increment = case channel.step:
         of Step.Increment: 4
@@ -260,7 +270,7 @@ proc do_dma_block(channel: Channel, port_num: uint32) =
 
     var address = channel.base
     var remsz = transfer_size(channel)
-
+    #echo "Starting block DMA size 0x", remsz.toHex()
     while remsz > 0:
         let cur_addr = address and 0x1FFFFC'u32
         case channel.direction:
@@ -284,7 +294,7 @@ proc do_dma_block(channel: Channel, port_num: uint32) =
     channel_done(channel, port_num)
 
 proc do_dma_linked_list(channel: Channel, port_num: uint32) =
-    echo "Starting linked list DMA"
+    #echo "Starting linked list DMA"
     let port = port_from_index(port_num)
     var address = channel.base and 0x1FFFFC'u32
     if channel.direction == Direction.ToRam:
@@ -380,6 +390,7 @@ proc load32*(address: uint32): uint32 =
             of 0: return gpu_read()
             of 4: return 0x1C000000'u32
             else: return 0x00'u32
+    elif offset == 0x1F801060'u32: return 0x00000B88'u32 # RAM_SIZE
     elif offset in 0x1F801070'u32 ..< 0x1F801078'u32:
         offset -= 0x1F801070'u32
         case offset:
@@ -485,7 +496,7 @@ proc store32*(address: uint32, value: uint32) =
             of 4:
                 if value != 0x1F802000:
                     quit("Bad expansion 2 base address 0x" & value.toHex(), QuitSuccess)
-            else: echo "Unhandled write to MEMCONTROL register"
+            else: discard #echo "Unhandled write to MEMCONTROL register"
         return
     elif offset in 0x1F801060'u32 ..< 0x1F801064'u32: return
     elif offset in 0x1F801070'u32 ..< 0x1F801078'u32:
@@ -501,7 +512,7 @@ proc store32*(address: uint32, value: uint32) =
         return
     elif offset in 0x1F801100'u32 ..< 0x1F801130'u32: # TIMERS
         offset -= 0x1F801100'u32
-        echo "Timer access ", value.toHex()
+        #echo "Timer access ", value.toHex()
         timers_store16(offset, uint16(value and 0xFFFF'u16))
         return
     elif offset in 0x1F801810'u32 ..< 0x1F801818'u32: # GPU
@@ -512,7 +523,7 @@ proc store32*(address: uint32, value: uint32) =
             else: quit("GPU write " & offset.toHex() & " " & value.toHex(), QuitSuccess)
         return
     elif address in 0xFFFE0130'u32 ..< 0xFFFE0134'u32:
-        echo "Unhandled write to CACHECONTROL ", value.toHex()
+        #echo "Unhandled write to CACHECONTROL ", value.toHex()
         return
     quit("Unhandled store32 into address " & address.toHex() & " value " & value.to_hex(), QuitSuccess)
 
@@ -567,10 +578,10 @@ proc store8*(address: uint32, value: uint8) =
         cdrom_store8(offset, value)
         return
     elif offset in 0x1F802000'u32 ..< 0x1F802042'u32:
-        echo "Unhandled write to expansion 2 register ", offset.toHex()
+        #echo "Unhandled write to expansion 2 register ", offset.toHex()
         return
     elif offset == 0x1F802080'u32:
         stdout.write char(value) # PCSX register
         return
-    echo "Unhandled store8 into address " & address.toHex() & " value " & value.to_hex()
+    #echo "Unhandled store8 into address " & address.toHex() & " value " & value.to_hex()
     #quit("Unhandled store8 into address " & address.toHex() & " value " & value.to_hex(), QuitSuccess)

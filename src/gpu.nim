@@ -1,4 +1,4 @@
-import strutils
+import strutils, opengl
 import renderer, counters, interrupt
 
 const VRAM_SIZE_PIXELS = 1024 * 512
@@ -130,6 +130,17 @@ proc gpu_read*(): uint32 =
     response = 0x00'u32
     return resp
 
+proc new_position_from_gp0(value: uint32): tuple[x: GLshort, y: GLshort, z: GLshort] =
+    let x = cast[int16](value and 0xFFFF)
+    let y = cast[int16](value shr 16)
+    return (cast[GLshort](x + drawing_x_offset), cast[GLshort](y + drawing_y_offset), 0.GLshort)
+
+proc new_color_from_gp0(value: uint32): tuple[r: GLubyte, g: GLubyte, b: GLubyte] =
+    let r = cast[uint8](value and 0xFF)
+    let g = cast[uint8]((value shr 8) and 0xFF)
+    let b = cast[uint8]((value shr 16) and 0xFF)
+    return (cast[GLubyte](r), cast[GLubyte](g), cast[GLubyte](b))
+
 proc position_from_gp0(value: uint32): tuple[x: int16, y: int16] =
     let x = cast[int16](value and 0xFFFF)
     let y = cast[int16](value shr 16)
@@ -140,6 +151,11 @@ proc color_from_gp0(value: uint32): tuple[r: uint8, g: uint8, b: uint8] =
     let g = cast[uint8]((value shr 8) and 0xFF)
     let b = cast[uint8]((value shr 16) and 0xFF)
     return (r, g, b)
+
+proc gp0_texture_coordinates(command: uint32): tuple[x: uint8, y: uint8] =
+    let x = command and 0xFF
+    let y = (command shr 8) and 0xFF
+    return (uint8(x), uint8(y))
 
 proc hres_from_fields(hr1: uint8, hr2: uint8): uint32 =
     let v = (hr2 and 1) or ((hr1 and 3) shl 1)
@@ -285,8 +301,8 @@ proc tick_gpu*() =
     let vblank_int = (display_line < display_line_start) or (display_line >= display_line_end)
 
     if (not vblank_interrupt) and vblank_int:
-        discard
-        #pend_irq(30, Interrupt.VBlank)
+        #discard
+        pend_irq(30, Interrupt.VBlank)
 
     if vblank_interrupt and (not vblank_int):
         frame_counter += 1
@@ -406,7 +422,7 @@ proc gp0_image_store() =
 
         let height = res shr 16
 
-        echo "Unhandled image store ", width, "x", height
+        #echo "Unhandled image store ", width, "x", height
 
 proc gp0_quad_shaded_opaque() =
     {.gcsafe.}:
@@ -455,8 +471,9 @@ proc gp0_quad_texture_blend_opaque() =
 
         set_clut(gp0_command.buffer[2] shr 16)
         set_draw_params(gp0_command.buffer[4] shr 16)
+        let (tex_x, tex_y) = gp0_texture_coordinates(gp0_command.buffer[2])
 
-        push_texture_quad(positions, 255'u8)
+        push_texture_quad(positions, 255'u8, tex_x, tex_y)
 
 proc gp0_fill_rectangle() =
     {.gcsafe.}:
@@ -571,20 +588,22 @@ proc gp0*(value: uint32) =
             of 0x01: (1'u32, gp0_clear_cache)
             of 0x02: (3'u32, gp0_fill_rectangle)
             of 0x04 .. 0x1E: (1'u32, gp0_nop)
+            of 0x20: (4'u32, gp0_nop)
             of 0x28: (5'u32, gp0_quad_mono_opaque)
             of 0x2C: (9'u32, gp0_quad_texture_blend_opaque)
             of 0x30: (6'u32, gp0_triangle_shaded_opaque)
             of 0x38: (8'u32, gp0_quad_shaded_opaque)
+            of 0x3C: (12'u32, gp0_nop)
             of 0x60: (3'u32, gp0_mono_rect_var_opaque)
             of 0x62: (3'u32, gp0_mono_rect_var_opaque) # actually semi
             of 0x68: (2'u32, gp0_dot_opaque)
             of 0x6A: (2'u32, gp0_dot_opaque) # actually semi
             of 0x70: (2'u32, gp0_mono_rect_8_8_opaque)
             of 0x72: (2'u32, gp0_mono_rect_8_8_opaque) # actually semi
-            #of 0x74: (1'u32, gp0_nop)
+            of 0x74: (3'u32, gp0_nop)
             of 0x78: (2'u32, gp0_mono_rect_16_16_opaque)
             of 0x7A: (2'u32, gp0_mono_rect_16_16_opaque) # actually semi
-            #of 0x7F: (1'u32, gp0_nop)
+            of 0x7F: (3'u32, gp0_nop)
             of 0xA0: (3'u32, gp0_image_load)
             of 0xC0: (3'u32, gp0_image_store)
             of 0xE1: (1'u32, gp0_draw_mode)

@@ -43,7 +43,8 @@ proc timer_set_mode(timer: Timer, value: uint16) =
         quit("Only pulse interrupts are supported", QuitSuccess)
 
     if timer.use_sync:
-        echo "Sync mode is not supported"
+        discard
+        #echo "Sync mode is not supported"
 
 proc timer_mode(timer: Timer): uint16 =
     var r = 0'u16
@@ -116,7 +117,7 @@ proc timers_store16*(offset: uint32, value: uint16) =
     let instance = offset shr 4
     case offset and 0xF:
         of 0:
-            echo "Set timer", instance, " value to ", value.toHex()
+            #echo "Set timer", instance, " value to ", value.toHex()
             if instance == 2 and value == 0:
                 #if timer_temp:
                     #timer_debug = true
@@ -126,10 +127,10 @@ proc timers_store16*(offset: uint32, value: uint16) =
             timers[instance].overflow_reached = false
             timers[instance].interrupt = false
         of 4:
-            echo "Set timer", instance, " mode to ", int64(value).toBin(16)
+            #echo "Set timer", instance, " mode to ", int64(value).toBin(16)
             timer_set_mode(timers[instance], value)
         of 8:
-            echo "Set timer", instance, " target to ", value.toHex()
+            #echo "Set timer", instance, " target to ", value.toHex()
             timers[instance].target = value
             timers[instance].target_reached = false
             timers[instance].overflow_reached = false

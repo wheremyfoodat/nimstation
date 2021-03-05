@@ -27,14 +27,14 @@ proc irq_ack*(value: uint16) =
     status = status and value
 
 proc irq_set_mask*(value: uint16) =
-    echo "Set IRQ mask to ", int64(value).toBin(16)
+    #echo "Set IRQ mask to ", int64(value).toBin(16)
     mask = value
 
 proc irq_active*(): bool =
     return (status and mask) != 0
 
 proc pend_irq*(delay: uint32, which: Interrupt) =
-    echo "Got new interrupt pending ", which
+    #echo "Got new interrupt pending ", which
     pending_irqs.add((delay, which))
 
 proc assert_irq*(which: Interrupt) =

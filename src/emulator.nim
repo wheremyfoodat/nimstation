@@ -1,13 +1,13 @@
 import times
 import cpu, renderer, gpu, cdrom
 
-var sideload = false
+var sideload = true
 var sideloadfile = "./exes/psxtest_cpu.exe"
 
 if sideload:
     set_sideload(sideloadfile)
 
-var fastboot = false
+var fastboot = true
 if fastboot:
     set_fastboot()
 
@@ -22,7 +22,7 @@ while true:
     run_next_instruction()
     tick_gpu()
 
-    #frame_time += cpuTime() - time
-    #if frame_time >= 0.016:
-        #render_frame()
-    #    frame_time = 0
+    frame_time += cpuTime() - time
+    if frame_time >= 0.016:
+        parse_events()
+        frame_time = 0

@@ -540,8 +540,9 @@ proc op_cop3() =
     exception(Exception.CoprocessorError)
 
 proc op_cop2() =
+    discard
     #delayed_load()
-    echo "Unhandled GTE instruction " & current_instruction.toHex()
+    #echo "Unhandled GTE instruction " & current_instruction.toHex()
     #quit("Unhandled GTE instruction " & current_instruction.toHex(), QuitSuccess)
 
 proc op_lwl() =
@@ -631,8 +632,14 @@ proc op_lwc1() =
     exception(Exception.CoprocessorError)
 
 proc op_lwc2() =
+    imm = imm_se()
+    let address = regs[s] + imm
     delayed_load()
-    quit("Unhandled GTW LWC", QuitSuccess)
+    if (address mod 4) == 0:
+        let v = load32(address)
+        #echo "Unhandled gte set data to ", t.toHex(), " value ", v.toHex()
+    else:
+        exception(Exception.LoadAddressError)
 
 proc op_lwc3() =
     delayed_load()
@@ -647,8 +654,16 @@ proc op_swc1() =
     exception(Exception.CoprocessorError)
 
 proc op_swc2() =
+    imm = imm_se()
+    let address = regs[s] + imm
     delayed_load()
-    quit("Unhandled GTW SWC", QuitSuccess)
+    let v = 0'u32 # load from gte
+    if (address mod 4) == 0:
+        store32(address, v)
+        #echo "Unhandled gte read data from ", t.toHex()
+    else:
+        exception(Exception.LoadAddressError)
+
 
 proc op_swc3() =
     delayed_load()
@@ -781,9 +796,15 @@ proc run_next_instruction*() =
 
     current_instruction = load32(pc)
 
-    if cd_debug:
+    if cdrom_debug:
         echo pc.toHex(), " ", current_instruction.toHex()
-        sleep(100)
+        #sleep(100)
+
+    if dump_regs:
+        if pc == 0x00001EB0'u32:
+            regs[9] = 0x00004000'u32
+        echo regs
+
 
     pc = next_pc
     next_pc = pc + 4'u32
@@ -793,11 +814,11 @@ proc run_next_instruction*() =
 
     cycle_count += 1
     if (cycle_count mod 8) == 0:
-        discard
-        #tick_timers()
+        #discard
+        tick_timers()
 
     if cop0_irq_active():
-        echo "Running interrupt"
+        #echo "Running interrupt"
         cpu_interrupt += 1
         exception(Exception.Interrupt)
     else:
