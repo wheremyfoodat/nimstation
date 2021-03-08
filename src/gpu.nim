@@ -1,4 +1,4 @@
-import strutils, opengl
+import strutils, csfml
 import renderer, counters, interrupt
 
 const VRAM_SIZE_PIXELS = 1024 * 512
@@ -6,7 +6,7 @@ type
     TextureDepth = enum
         T4Bit = 0,
         T8Bit = 1,
-        T15Bit = 2
+        T16Bit = 2
 
     Field = enum
         Bottom = 0,
@@ -70,6 +70,8 @@ proc clear_image_buffer(buffer: ImageBuffer) =
 proc gp0_nop() =
     stdout.write ""
 
+var draw_mode: uint16
+
 var page_base_x: uint8
 var page_base_y: uint8
 var semi_transparency: uint8
@@ -129,17 +131,6 @@ proc gpu_read*(): uint32 =
     let resp = response
     response = 0x00'u32
     return resp
-
-proc new_position_from_gp0(value: uint32): tuple[x: GLshort, y: GLshort, z: GLshort] =
-    let x = cast[int16](value and 0xFFFF)
-    let y = cast[int16](value shr 16)
-    return (cast[GLshort](x + drawing_x_offset), cast[GLshort](y + drawing_y_offset), 0.GLshort)
-
-proc new_color_from_gp0(value: uint32): tuple[r: GLubyte, g: GLubyte, b: GLubyte] =
-    let r = cast[uint8](value and 0xFF)
-    let g = cast[uint8]((value shr 8) and 0xFF)
-    let b = cast[uint8]((value shr 16) and 0xFF)
-    return (cast[GLubyte](r), cast[GLubyte](g), cast[GLubyte](b))
 
 proc position_from_gp0(value: uint32): tuple[x: int16, y: int16] =
     let x = cast[int16](value and 0xFFFF)
@@ -224,21 +215,24 @@ proc gpu_status*(): uint32 =
     return r
 
 proc gp0_draw_mode() =
-    page_base_x = uint8(gp0_instruction and 0xF)
-    page_base_y = uint8((gp0_instruction shr 4) and 1)
-    semi_transparency = uint8((gp0_instruction shr 5) and 3)
+    {.gcsafe.}:
+        draw_mode = uint16(gp0_command.buffer[0])
+        page_base_x = uint8(gp0_instruction and 0xF)
+        page_base_y = uint8((gp0_instruction shr 4) and 1)
+        semi_transparency = uint8((gp0_instruction shr 5) and 3)
 
-    texture_depth = case (gp0_instruction shr 7) and 3:
-        of 0: TextureDepth.T4Bit
-        of 1: TextureDepth.T8Bit
-        of 2: TextureDepth.T15Bit
-        else: quit("Unhandled texture depth", QuitSuccess)
-
-    dithering = ((gp0_instruction shr 0) and 1) != 0
-    draw_to_display = ((gp0_instruction shr 10) and 1) != 0
-    texture_disable = ((gp0_instruction shr 11) and 1) != 0
-    rectangle_texture_x_flip = ((gp0_instruction shr 12) and 1) != 0
-    rectangle_texture_y_flip = ((gp0_instruction shr 13) and 1) != 0
+        texture_depth = case (gp0_instruction shr 7) and 3:
+            of 0: TextureDepth.T4Bit
+            of 1: TextureDepth.T8Bit
+            of 2: TextureDepth.T16Bit
+            else:
+                echo "Unhandled texture depth"
+                TextureDepth.T16Bit
+        dithering = ((gp0_instruction shr 0) and 1) != 0
+        draw_to_display = ((gp0_instruction shr 10) and 1) != 0
+        texture_disable = ((gp0_instruction shr 11) and 1) != 0
+        rectangle_texture_x_flip = ((gp0_instruction shr 12) and 1) != 0
+        rectangle_texture_y_flip = ((gp0_instruction shr 13) and 1) != 0
 
 proc gp1_reset() =
     gpu_interrupt = false
@@ -389,10 +383,17 @@ proc gp0_quad_mono_opaque() =
             position_from_gp0(gp0_command.buffer[4])
             ]
 
-        let color = color_from_gp0(gp0_command.buffer[0])
-        let colors = [color, color, color, color]
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2])
 
-        push_quad(positions, colors)
+        let vertices = [
+            vertex(vec2(cfloat(positions[0][0]), cfloat(positions[0][1])), colors),
+            vertex(vec2(cfloat(positions[1][0]), cfloat(positions[1][1])), colors),
+            vertex(vec2(cfloat(positions[2][0]), cfloat(positions[2][1])), colors),
+            vertex(vec2(cfloat(positions[3][0]), cfloat(positions[3][1])), colors)
+        ]
+
+        push_quad(vertices)
 
 proc gp0_clear_cache() =
     stdout.write "" # not implemented yet
@@ -440,7 +441,14 @@ proc gp0_quad_shaded_opaque() =
             color_from_gp0(gp0_command.buffer[6])
             ]
 
-        push_quad(positions, colors)
+        let vertices = [
+            vertex(vec2(cfloat(positions[0][0]), cfloat(positions[0][1])), color(colors[0][0], colors[0][1], colors[0][2])),
+            vertex(vec2(cfloat(positions[1][0]), cfloat(positions[1][1])), color(colors[1][0], colors[1][1], colors[1][2])),
+            vertex(vec2(cfloat(positions[2][0]), cfloat(positions[2][1])), color(colors[2][0], colors[2][1], colors[2][2])),
+            vertex(vec2(cfloat(positions[3][0]), cfloat(positions[3][1])), color(colors[3][0], colors[3][1], colors[3][2]))
+        ]
+
+        push_quad(vertices)
 
 proc gp0_triangle_shaded_opaque() =
     {.gcsafe.}:
@@ -456,7 +464,13 @@ proc gp0_triangle_shaded_opaque() =
             color_from_gp0(gp0_command.buffer[4])
             ]
 
-        push_triangle(positions, colors)
+        let vertices = [
+            vertex(vec2(cfloat(positions[0][0]), cfloat(positions[0][1])), color(colors[0][0], colors[0][1], colors[0][2])),
+            vertex(vec2(cfloat(positions[1][0]), cfloat(positions[1][1])), color(colors[1][0], colors[1][1], colors[1][2])),
+            vertex(vec2(cfloat(positions[2][0]), cfloat(positions[2][1])), color(colors[2][0], colors[2][1], colors[2][2]))
+        ]
+
+        push_triangle(vertices)
 
 proc gp0_quad_texture_blend_opaque() =
     {.gcsafe.}:
@@ -467,13 +481,15 @@ proc gp0_quad_texture_blend_opaque() =
             position_from_gp0(gp0_command.buffer[7])
             ]
 
-        #let color = color_from_gp0(gp0_command.buffer[0])
-
         set_clut(gp0_command.buffer[2] shr 16)
         set_draw_params(gp0_command.buffer[4] shr 16)
         let (tex_x, tex_y) = gp0_texture_coordinates(gp0_command.buffer[2])
 
-        push_texture_quad(positions, 255'u8, tex_x, tex_y)
+        let temp_color = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_color[0], temp_color[1], temp_color[2])
+
+
+        push_texture(positions, tex_x, tex_y, 255)
 
 proc gp0_fill_rectangle() =
     {.gcsafe.}:
@@ -503,9 +519,16 @@ proc gp0_mono_rect_var_opaque() =
         positions[3][0] += size[0]
         positions[3][1] += size[1]
 
-        push_quad(positions, colors)
+        let vertices = [
+            vertex(vec2(cfloat(positions[0][0]), cfloat(positions[0][1])), color(colors[0][0], colors[0][1], colors[0][2])),
+            vertex(vec2(cfloat(positions[1][0]), cfloat(positions[1][1])), color(colors[1][0], colors[1][1], colors[1][2])),
+            vertex(vec2(cfloat(positions[2][0]), cfloat(positions[2][1])), color(colors[2][0], colors[2][1], colors[2][2])),
+            vertex(vec2(cfloat(positions[3][0]), cfloat(positions[3][1])), color(colors[3][0], colors[3][1], colors[3][2]))
+        ]
 
-proc gp0_dot_opaque() =
+        push_quad(vertices)
+
+proc gp0_mono_rect_var_semi() =
     {.gcsafe.}:
         let colors = [
             color_from_gp0(gp0_command.buffer[0]),
@@ -513,59 +536,190 @@ proc gp0_dot_opaque() =
             color_from_gp0(gp0_command.buffer[0]),
             color_from_gp0(gp0_command.buffer[0])
             ]
+        let size = position_from_gp0(gp0_command.buffer[2])
         var positions = [
             position_from_gp0(gp0_command.buffer[1]),
             position_from_gp0(gp0_command.buffer[1]),
             position_from_gp0(gp0_command.buffer[1]),
             position_from_gp0(gp0_command.buffer[1])
             ]
-        positions[1][0] += 1
-        positions[2][1] += 1
-        positions[3][0] += 1
-        positions[3][1] += 1
-        push_quad(positions, colors)
+
+        positions[1][0] += size[0]
+        positions[2][1] += size[1]
+        positions[3][0] += size[0]
+        positions[3][1] += size[1]
+
+        let vertices = [
+            vertex(vec2(cfloat(positions[0][0]), cfloat(positions[0][1])), color(colors[0][0], colors[0][1], colors[0][2], 150)),
+            vertex(vec2(cfloat(positions[1][0]), cfloat(positions[1][1])), color(colors[1][0], colors[1][1], colors[1][2], 150)),
+            vertex(vec2(cfloat(positions[2][0]), cfloat(positions[2][1])), color(colors[2][0], colors[2][1], colors[2][2], 150)),
+            vertex(vec2(cfloat(positions[3][0]), cfloat(positions[3][1])), color(colors[3][0], colors[3][1], colors[3][2], 150))
+        ]
+
+        push_quad(vertices)
+
+proc gp0_dot_opaque() =
+    {.gcsafe.}:
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2])
+        let temp_pos = position_from_gp0(gp0_command.buffer[1])
+
+        let vertices = [
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 1), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1] + 1)), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 1), cfloat(temp_pos[1] + 1)), colors)
+        ]
+
+        push_quad(vertices)
+
+proc gp0_dot_semi() =
+    {.gcsafe.}:
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2], 150)
+        let temp_pos = position_from_gp0(gp0_command.buffer[1])
+
+        let vertices = [
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 1), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1] + 1)), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 1), cfloat(temp_pos[1] + 1)), colors)
+        ]
+
+        push_quad(vertices)
 
 proc gp0_mono_rect_8_8_opaque() =
     {.gcsafe.}:
-        let colors = [
-            color_from_gp0(gp0_command.buffer[0]),
-            color_from_gp0(gp0_command.buffer[0]),
-            color_from_gp0(gp0_command.buffer[0]),
-            color_from_gp0(gp0_command.buffer[0])
-            ]
-        let top_left = position_from_gp0(gp0_command.buffer[1])
+
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2])
+        let temp_pos = position_from_gp0(gp0_command.buffer[1])
+
+        let vertices = [
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 8), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1] + 8)), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 8), cfloat(temp_pos[1] + 8)), colors)
+        ]
+
+        push_quad(vertices)
+
+proc gp0_mono_rect_8_8_semi() =
+    {.gcsafe.}:
+
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2], 150)
+        let temp_pos = position_from_gp0(gp0_command.buffer[1])
+
+        let vertices = [
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 8), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1] + 8)), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 8), cfloat(temp_pos[1] + 8)), colors)
+        ]
+
+        push_quad(vertices)
+
+proc gp0_monochrome_triangle() =
+    {.gcsafe.}:
+
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2], 255)
+
         var positions = [
-            top_left,
-            top_left,
-            top_left,
-            top_left
+            position_from_gp0(gp0_command.buffer[1]),
+            position_from_gp0(gp0_command.buffer[2]),
+            position_from_gp0(gp0_command.buffer[3])
             ]
-        positions[1][0] += 8
-        positions[2][1] += 8
-        positions[3][0] += 8
-        positions[3][1] += 8
-        push_quad(positions, colors)
+
+        let vertices = [
+            vertex(vec2(cfloat(positions[0][0]), cfloat(positions[0][0])), colors),
+            vertex(vec2(cfloat(positions[1][0]), cfloat(positions[1][0])), colors),
+            vertex(vec2(cfloat(positions[2][0]), cfloat(positions[2][0])), colors),
+        ]
+
+        push_triangle(vertices)
 
 proc gp0_mono_rect_16_16_opaque() =
     {.gcsafe.}:
-        let colors = [
-            color_from_gp0(gp0_command.buffer[0]),
-            color_from_gp0(gp0_command.buffer[0]),
-            color_from_gp0(gp0_command.buffer[0]),
-            color_from_gp0(gp0_command.buffer[0])
-            ]
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2])
+        let temp_pos = position_from_gp0(gp0_command.buffer[1])
+
+        let vertices = [
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 16), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1] + 16)), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 16), cfloat(temp_pos[1] + 16)), colors)
+        ]
+
+        push_quad(vertices)
+
+proc gp0_mono_rect_16_16_semi() =
+    {.gcsafe.}:
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2], 150)
+        let temp_pos = position_from_gp0(gp0_command.buffer[1])
+
+        let vertices = [
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 16), cfloat(temp_pos[1])), colors),
+            vertex(vec2(cfloat(temp_pos[0]), cfloat(temp_pos[1] + 16)), colors),
+            vertex(vec2(cfloat(temp_pos[0] + 16), cfloat(temp_pos[1] + 16)), colors)
+        ]
+
+        push_quad(vertices)
+
+proc gp0_rect_sized_textured(width: int16, height: int16) =
+    {.gcsafe.}:
+        set_draw_params(uint32(draw_mode))
+        set_clut(gp0_command.buffer[2] shr 16)
         let top_left = position_from_gp0(gp0_command.buffer[1])
-        var positions = [
-            top_left,
-            top_left,
-            top_left,
-            top_left
-            ]
-        positions[1][0] += 16
-        positions[2][1] += 16
-        positions[3][0] += 16
-        positions[3][1] += 16
-        push_quad(positions, colors)
+        let tex_top_left = gp0_texture_coordinates(gp0_command.buffer[2])
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2])
+        let positions = [
+            (top_left[0], top_left[1]),
+            (top_left[0] +% width, top_left[1]),
+            (top_left[0], top_left[1] +% height),
+            (top_left[0] +% width, top_left[1] +% height)
+        ]
+        push_texture(positions, tex_top_left[0], tex_top_left[1], 255)
+
+proc gp0_textured_shaded_quad() =
+    # TODO: texture may not be the same size as the quad
+    {.gcsafe.}:
+        set_draw_params(gp0_command.buffer[5] shr 16)
+        set_clut(gp0_command.buffer[2] shr 16)
+        let tex_top_left = gp0_texture_coordinates(gp0_command.buffer[2])
+        let positions = [
+            position_from_gp0(gp0_command.buffer[1]),
+            position_from_gp0(gp0_command.buffer[4]),
+            position_from_gp0(gp0_command.buffer[7]),
+            position_from_gp0(gp0_command.buffer[10])
+        ]
+        push_texture(positions, tex_top_left[0], tex_top_left[1], 255)
+
+proc gp0_textured_rect() =
+    {.gcsafe.}:
+        let size = position_from_gp0(gp0_command.buffer[3])
+
+        gp0_rect_sized_textured(size[0], size[1])
+
+proc gp0_textured_rect_16x16() =
+    {.gcsafe.}:
+        gp0_rect_sized_textured(16, 16)
+
+proc gp0_textured_rect_8x8() =
+    {.gcsafe.}:
+        gp0_rect_sized_textured(8, 8)
+
+proc gp0_copy_rect() =
+    {.gcsafe.}:
+        let size = position_from_gp0(gp0_command.buffer[3])
+        let src_top_left = position_from_gp0(gp0_command.buffer[1])
+        let dst_top_left = position_from_gp0(gp0_command.buffer[2])
+        echo "Copy rectangle ", size, " ", src_top_left, " ", dst_top_left
 
 proc gp1_get_gpu_info() =
     response = 0x01'u32
@@ -588,22 +742,34 @@ proc gp0*(value: uint32) =
             of 0x01: (1'u32, gp0_clear_cache)
             of 0x02: (3'u32, gp0_fill_rectangle)
             of 0x04 .. 0x1E: (1'u32, gp0_nop)
-            of 0x20: (4'u32, gp0_nop)
+            of 0x20: (4'u32, gp0_monochrome_triangle)
+            of 0x22: (4'u32, gp0_monochrome_triangle)
             of 0x28: (5'u32, gp0_quad_mono_opaque)
             of 0x2C: (9'u32, gp0_quad_texture_blend_opaque)
             of 0x30: (6'u32, gp0_triangle_shaded_opaque)
             of 0x38: (8'u32, gp0_quad_shaded_opaque)
-            of 0x3C: (12'u32, gp0_nop)
+            of 0x3C: (12'u32, gp0_textured_shaded_quad)
             of 0x60: (3'u32, gp0_mono_rect_var_opaque)
-            of 0x62: (3'u32, gp0_mono_rect_var_opaque) # actually semi
+            of 0x62: (3'u32, gp0_mono_rect_var_semi)
+            of 0x64: (4'u32, gp0_textured_rect)
+            of 0x65: (4'u32, gp0_textured_rect)
+            of 0x66: (4'u32, gp0_textured_rect)
+            of 0x67: (4'u32, gp0_textured_rect)
             of 0x68: (2'u32, gp0_dot_opaque)
-            of 0x6A: (2'u32, gp0_dot_opaque) # actually semi
+            of 0x6A: (2'u32, gp0_dot_semi)
             of 0x70: (2'u32, gp0_mono_rect_8_8_opaque)
-            of 0x72: (2'u32, gp0_mono_rect_8_8_opaque) # actually semi
-            of 0x74: (3'u32, gp0_nop)
+            of 0x72: (2'u32, gp0_mono_rect_8_8_semi)
+            of 0x74: (3'u32, gp0_textured_rect_8x8)
+            of 0x75: (3'u32, gp0_textured_rect_8x8)
+            of 0x76: (3'u32, gp0_textured_rect_8x8)
+            of 0x77: (3'u32, gp0_textured_rect_8x8)
             of 0x78: (2'u32, gp0_mono_rect_16_16_opaque)
-            of 0x7A: (2'u32, gp0_mono_rect_16_16_opaque) # actually semi
-            of 0x7F: (3'u32, gp0_nop)
+            of 0x7A: (2'u32, gp0_mono_rect_16_16_semi)
+            of 0x7C: (3'u32, gp0_textured_rect_16x16)
+            of 0x7D: (3'u32, gp0_textured_rect_16x16)
+            of 0x7E: (3'u32, gp0_textured_rect_16x16)
+            of 0x7F: (3'u32, gp0_textured_rect_16x16)
+            of 0x80: (4'u32, gp0_copy_rect)
             of 0xA0: (3'u32, gp0_image_load)
             of 0xC0: (3'u32, gp0_image_store)
             of 0xE1: (1'u32, gp0_draw_mode)
@@ -628,7 +794,7 @@ proc gp0*(value: uint32) =
         of Gp0Mode.ImageLoad:
             push_word_image_buffer(image_buffer, value)
             if gp0_words_remaining == 0:
-                renderer_load_image(image_buffer.top_left, image_buffer.resolution, image_buffer.buffer, image_buffer.index)
+                renderer_load_image(image_buffer.top_left, image_buffer.resolution, image_buffer.buffer)
                 clear_image_buffer(image_buffer)
                 gp0_mode = Gp0Mode.Command
 

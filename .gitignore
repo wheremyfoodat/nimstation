@@ -4,6 +4,7 @@ htmldocs/
 exes/
 games/
 *.BIN
+*.dll
 *.exe
 *.PDF
 *.idb

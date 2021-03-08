@@ -371,8 +371,8 @@ proc load32*(address: uint32): uint32 =
     if (address mod 4) != 0:
         quit("Unaligned load32 address " & address.toHex(), QuitSuccess)
     var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00200000'u32: # RAM
-        #offset = offset and 0x001FFFFF
+    if offset in 0x00000000'u32 ..< 0x00800000'u32: # RAM
+        offset = offset and 0x001FFFFF
         return ram_load32(offset)
     elif offset in 0x1F800000'u32 ..< 0x1F800400'u32: # SCRATCHPAD
         offset -= 0x1F800000'u32
@@ -415,7 +415,8 @@ proc load32*(address: uint32): uint32 =
 
 proc load16*(address: uint32): uint16 =
     var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00200000'u32: # RAM
+    if offset in 0x00000000'u32 ..< 0x00800000'u32: # RAM
+        offset = offset and 0x001FFFFF'u32
         let b0 = uint16(ram[offset + 0])
         let b1 = uint16(ram[offset + 1])
         return b0 or (b1 shl 8)
@@ -425,11 +426,9 @@ proc load16*(address: uint32): uint16 =
         let b1 = uint16(scratchpad[offset + 1])
         return b0 or (b1 shl 8)
     elif offset in 0x1F801040'u32 ..< 0x1F801060'u32: # PADMEM
+        #echo "padmem load16"
         offset -= 0x1F801040'u32
-        #echo "load16 padmem ", offset.toHex()
-        case offset:
-            of 4: return 0xFFFF'u16
-            else: return 0x00'u16
+        return 0xFFFF'u16
     elif offset in 0x1F801070'u32 ..< 0x1F801078'u32: # IRQCONTROL
         offset -= 0x1F801070'u32
         case offset:
@@ -445,7 +444,8 @@ proc load16*(address: uint32): uint16 =
 
 proc load8*(address: uint32): uint8 =
     var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00200000'u32: # RAM
+    if offset in 0x00000000'u32 ..< 0x00800000'u32: # RAM
+        offset = offset and 0x001FFFFF'u32
         return uint8(ram[offset])
     elif offset in 0x1F000000'u32 ..< 0x1F080000'u32: # Expansion
         return 0xFF'u8
@@ -455,10 +455,8 @@ proc load8*(address: uint32): uint8 =
         return b0
     elif offset in 0x1F801040'u32 ..< 0x1F801060'u32: # PADMEM
         offset -= 0x1F801040'u32
-        #echo "load8 padmem ", offset.toHex()
-        case offset:
-            of 4: return 0xFF'u8
-            else: return 0x00'u8
+        #echo "padmem load8"
+        return 0xFF'u8
     elif offset in 0x1F801800'u32 ..< 0x1F801804'u32: # CDROM
         offset -= 0x1F801800'u32
         return cdrom_load8(offset)
@@ -473,7 +471,8 @@ proc store32*(address: uint32, value: uint32) =
         quit("Unaligned store32 address " & address.toHex(), QuitSuccess)
 
     var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00200000'u32:
+    if offset in 0x00000000'u32 ..< 0x00800000'u32:
+        offset = offset and 0x001FFFFF'u32
         ram_store32(offset, value)
         return
     elif offset in 0x1F800000'u32 ..< 0x1F800400'u32: # SCRATCHPAD
@@ -531,7 +530,8 @@ proc store16*(address: uint32, value: uint16) =
     if (address mod 2) != 0:
         quit("Unaligned store16 address " & address.toHex(), QuitSuccess)
     var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00200000'u32: # RAM
+    if offset in 0x00000000'u32 ..< 0x00800000'u32: # RAM
+        offset = offset and 0x001FFFFF'u32
         let b0 = uint8(value and 0xFF)
         let b1 = uint8((value shr 8) and 0xFF)
         ram[offset + 0] = b0
@@ -566,7 +566,8 @@ proc store16*(address: uint32, value: uint16) =
 
 proc store8*(address: uint32, value: uint8) =
     var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00200000'u32: # RAM
+    if offset in 0x00000000'u32 ..< 0x00800000'u32: # RAM
+        offset = offset and 0x001FFFFF'u32
         ram[offset] = value
         return
     elif offset in 0x1F800000'u32 ..< 0x1F800400'u32: # SCRATCHPAD

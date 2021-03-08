@@ -1,5 +1,5 @@
 import strutils, os
-import bus, interrupt, timers, counters, cdrom
+import bus, interrupt, timers, counters, cdrom, gte
 
 #enableProfiling()
 
@@ -531,6 +531,24 @@ proc op_xori() =
     delayed_load()
     set_reg(t, v)
 
+proc op_mfc2() =
+    let v = gte_data(d)
+    delayed_load_chain(t, v)
+
+proc op_cfc2() =
+    let v = gte_control(d)
+    delayed_load_chain(t, v)
+
+proc op_mtc2() =
+    let v = regs[t]
+    delayed_load()
+    gte_set_data(d, v)
+
+proc op_ctc2() =
+    let v = regs[t]
+    delayed_load()
+    gte_set_control(d, v)
+
 proc op_cop1() =
     delayed_load()
     exception(Exception.CoprocessorError)
@@ -540,10 +558,17 @@ proc op_cop3() =
     exception(Exception.CoprocessorError)
 
 proc op_cop2() =
-    discard
-    #delayed_load()
-    #echo "Unhandled GTE instruction " & current_instruction.toHex()
-    #quit("Unhandled GTE instruction " & current_instruction.toHex(), QuitSuccess)
+
+    #s is GTE opcode
+    if (s and 0x10) != 0:
+        gte_command(current_instruction)
+    else:
+        case s:
+            of 0b00000: op_mfc2()
+            of 0b00010: op_cfc2()
+            of 0b00100: op_mtc2()
+            of 0b00110: op_ctc2()
+            else:   quit("Unhandled GTE instruction " & current_instruction.toHex(), QuitSuccess)
 
 proc op_lwl() =
     imm = imm_se()
@@ -637,7 +662,7 @@ proc op_lwc2() =
     delayed_load()
     if (address mod 4) == 0:
         let v = load32(address)
-        #echo "Unhandled gte set data to ", t.toHex(), " value ", v.toHex()
+        gte_set_data(t, v)
     else:
         exception(Exception.LoadAddressError)
 
@@ -656,11 +681,10 @@ proc op_swc1() =
 proc op_swc2() =
     imm = imm_se()
     let address = regs[s] + imm
+    let v = gte_data(t)
     delayed_load()
-    let v = 0'u32 # load from gte
     if (address mod 4) == 0:
         store32(address, v)
-        #echo "Unhandled gte read data from ", t.toHex()
     else:
         exception(Exception.LoadAddressError)
 
@@ -693,6 +717,9 @@ proc cop0_irq_active(): bool =
         if irq_enabled:
             return true
     return false
+
+proc is_gte(): bool =
+    return (current_instruction shr 26) == 0b010001
 
 proc decode_and_execute(instruction: uint32) =
     function = instruction shr 26
@@ -801,9 +828,9 @@ proc run_next_instruction*() =
         #sleep(100)
 
     if dump_regs:
-        if pc == 0x00001EB0'u32:
-            regs[9] = 0x00004000'u32
-        echo regs
+        if pc == 0x800702AC'u32:
+            regs[2] = 0xFFFFFFFF'u32
+        #echo regs
 
 
     pc = next_pc
@@ -820,6 +847,8 @@ proc run_next_instruction*() =
     if cop0_irq_active():
         #echo "Running interrupt"
         cpu_interrupt += 1
+        if is_gte():
+            decode_and_execute(current_instruction)
         exception(Exception.Interrupt)
     else:
         irq_tick()

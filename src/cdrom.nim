@@ -78,6 +78,17 @@ var cdrom_debug*: bool
 var dump_regs*: bool
 var get_stat_count: uint8
 
+var rungame*: bool
+var gamefile_name*: string
+var gamefile_name2 = "games/pb2/Puzzle Bobble 2 (Japan) (Track 02).bin"
+var gamefile: TaintedString
+var gamefile2: TaintedString
+var gamefile_region*: char
+
+proc read_game*() =
+    gamefile = readFile(gamefile_name)
+    gamefile2 = readFile(gamefile_name2)
+
 proc bcd_to_int(val: uint8): uint8 =
     var result = 0'u8
     result = result * 100 + (val shr 4) * 10 + (val and 15)
@@ -103,24 +114,23 @@ proc trigger_irq2(irqval: uint8, delay: uint32) =
     irq_flags = prev_flag
 
 proc read_sector() =
-    var gamefile = newFileStream("games/cc/Crossroad Crisis.bin", fmRead)
-
-    echo "CDROM read sector at offset ", position.toHex()
-    for i in (0 ..< position):
-        discard gamefile.readChar()
-
+    var position2 = 0'u32
+    if position_m >= 2:
+        position2 = position - (2*60*75*2352)
     if read_whole_sector:
-        for i in (0 ..< 12):
-            discard gamefile.readChar()
-        for i in (0 ..< 2340):
-            filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile.readChar())
+        for i in (0 ..< 2340'u32):
+            if position_m >= 2:
+                filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile2[position2 + 12 + i])
+            else:
+                filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile[position + 12 + i])
             filebuffer.write_idx += 1
         rx_len = 2340'u16
     else:
-        for i in (0 ..< 24):
-            discard gamefile.readChar()
-        for i in (0 ..< 2048):
-            filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile.readChar())
+        for i in (0 ..< 2048'u32):
+            if position_m >= 2:
+                filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile2[position2 + 12 + i])
+            else:
+                filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile[position + 24 + i])
             filebuffer.write_idx += 1
         rx_len = 2048'u16
 
@@ -141,12 +151,16 @@ proc cdrom_set_interrupt_mask(value: uint8) =
 
 proc do_seek() =
     position_m = seek_target_m
-    position_s = seek_target_s
+    if position_m < 2:
+        position_s = seek_target_s - 2
+    else:
+        position_s = seek_target_s
     position_f = seek_target_f
     #if double_speed:
     #    position = (uint32(position_s - 2) * 150) + uint32(position_f) * 2352
     #else:
-    position = (((uint32(position_m)*60 + uint32(position_s - 2)) * 75) + uint32(position_f)) * 2352
+    position = (((uint32(position_m)*60 + uint32(position_s)) * 75) + uint32(position_f)) * 2352
+    echo "CDROM seeked to ", position.toHex()
 
     seek_target_pending = false
 
@@ -155,8 +169,10 @@ proc drive_status(): uint8 =
     r = r or (1 shl 1) # motor on
     if reading:
         r = r or (1 shl 5) # 1 if reading
-    #return 0x10 #if no game
-    return r
+    if not rungame:
+        return 0x10 #if no game
+    else:
+        return r
 
 proc cmd_get_stat() =
     let status = drive_status()
@@ -214,7 +230,7 @@ proc cmd_get_id() =
     fifo_push(responses, uint8('S'))
     fifo_push(responses, uint8('C'))
     fifo_push(responses, uint8('E'))
-    fifo_push(responses, uint8('A'))
+    fifo_push(responses, uint8(gamefile_region))
     trigger_irq1(3'u8, 50000'u32)
     trigger_irq2(2'u8, 70000'u32)
 
@@ -269,12 +285,13 @@ proc cmd_read() =
     var status = drive_status()
     fifo_push(responses, status)
     trigger_irq1(3'u8, 50000'u32)
+    do_seek()
     read_sector()
     first_read = true
     if double_speed:
-        next_int1 = 501000
-    else:
         next_int1 = 275000
+    else:
+        next_int1 = 501000
 
 proc cmd_pause() =
     var status = drive_status()
@@ -316,9 +333,9 @@ proc tick_flags*() =
                 if not rx_active:
                     trigger_irq2(1'u8, 1'u32)
                     if double_speed:
-                        next_int1 = 45100
+                        next_int1 = 225000
                     else:
-                        next_int1 = 22500
+                        next_int1 = 451000
                     #echo "CDROM triggered int1"
 
     if pending_flag_delay != 0:
