@@ -1,4 +1,4 @@
-import strutils, streams
+import strutils
 import interrupt
 
 type
@@ -25,9 +25,6 @@ proc fifo_clear(fifo: Fifo) =
     fifo.read_idx = 0'u8
     for i in 0 ..< 16:
         fifo.buffer[i] = 0'u8
-
-proc fifo_len(fifo: Fifo): uint8 =
-    return (fifo.write_idx - fifo.read_idx) and 0x1F'u8
 
 proc fifo_push(fifo: Fifo, value: uint8) =
     let idx = fifo.write_idx and 0xF'u8
@@ -90,9 +87,7 @@ proc read_game*() =
     gamefile2 = readFile(gamefile_name2)
 
 proc bcd_to_int(val: uint8): uint8 =
-    var result = 0'u8
-    result = result * 100 + (val shr 4) * 10 + (val and 15)
-    return result
+    return (val shr 4) * 10 + (val and 15)
 
 
 proc irq(): bool =
@@ -114,23 +109,20 @@ proc trigger_irq2(irqval: uint8, delay: uint32) =
     irq_flags = prev_flag
 
 proc read_sector() =
-    var position2 = 0'u32
-    if position_m >= 2:
-        position2 = position - (2*60*75*2352)
     if read_whole_sector:
         for i in (0 ..< 2340'u32):
-            if position_m >= 2:
-                filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile2[position2 + 12 + i])
-            else:
+            if (position + 12 + i) < uint32(gamefile.len):
                 filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile[position + 12 + i])
+            else:
+                filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile2[(position + 12 + i) -  uint32(gamefile.len)])
             filebuffer.write_idx += 1
         rx_len = 2340'u16
     else:
         for i in (0 ..< 2048'u32):
-            if position_m >= 2:
-                filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile2[position2 + 12 + i])
-            else:
+            if (position + 24 + i) < uint32(gamefile.len):
                 filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile[position + 24 + i])
+            else:
+                filebuffer.buffer[filebuffer.write_idx] = uint8(gamefile2[(position + 24 + i) -  uint32(gamefile.len)])
             filebuffer.write_idx += 1
         rx_len = 2048'u16
 

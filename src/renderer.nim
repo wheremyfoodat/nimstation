@@ -64,7 +64,7 @@ proc renderer_fill_rectangle*(position: tuple[x: int16, y: int16], size: tuple[x
 
     for y in (0 ..< size[1]):
         for x in (0 ..< size[0]):
-            vram[position[1] + y][(position[0] + x) and 1023] = fill_color
+            vram[(position[1] + y) and 0x1FF][(position[0] + x) and 0x3FF] = fill_color
             pixels.add(color.r)
             pixels.add(color.g)
             pixels.add(color.b)
@@ -98,7 +98,7 @@ proc get_texel_16bit(x: uint32, y: uint32): uint16 =
 proc render_frame*() =
 
     if (nvertices > 0) or (ntextures > 0):
-        window.clear Black
+        #window.clear Black
         window.draw(vram_sprite)
 
     if nvertices > 0:

@@ -154,11 +154,11 @@ proc channel_control(channel: Channel): uint32 =
     r = r or (uint32(channel.dummy) shl 29)
 
 proc set_channel_control(channel: Channel, value: uint32) =
-    channel.direction = case (value and 1) != 0:
+    channel.direction = case ((value and 1) != 0):
         of true: Direction.FromRam
         of false: Direction.ToRam
 
-    channel.step = case ((value shr 1) and 1) != 0:
+    channel.step = case (((value shr 1) and 1) != 0):
         of true: Step.Decrement
         of false: Step.Increment
 
@@ -385,10 +385,9 @@ proc load32*(address: uint32): uint32 =
         return 0x00'u32
     elif offset in 0x1F801810'u32 ..< 0x1F801818'u32: # GPU
         offset -= 0x1F801810'u32
-        #echo "GPU read ", offset
         case offset:
             of 0: return gpu_read()
-            of 4: return 0x1C000000'u32
+            of 4: return gpu_status()
             else: return 0x00'u32
     elif offset == 0x1F801060'u32: return 0x00000B88'u32 # RAM_SIZE
     elif offset in 0x1F801070'u32 ..< 0x1F801078'u32:
@@ -511,7 +510,6 @@ proc store32*(address: uint32, value: uint32) =
         return
     elif offset in 0x1F801100'u32 ..< 0x1F801130'u32: # TIMERS
         offset -= 0x1F801100'u32
-        #echo "Timer access ", value.toHex()
         timers_store16(offset, uint16(value and 0xFFFF'u16))
         return
     elif offset in 0x1F801810'u32 ..< 0x1F801818'u32: # GPU
@@ -584,5 +582,7 @@ proc store8*(address: uint32, value: uint8) =
     elif offset == 0x1F802080'u32:
         stdout.write char(value) # PCSX register
         return
+    elif offset == 0x1F801040'u32: # JOYDATA
+        return
     #echo "Unhandled store8 into address " & address.toHex() & " value " & value.to_hex()
-    #quit("Unhandled store8 into address " & address.toHex() & " value " & value.to_hex(), QuitSuccess)
+    quit("Unhandled store8 into address " & address.toHex() & " value " & value.to_hex(), QuitSuccess)

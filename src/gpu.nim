@@ -86,9 +86,10 @@ var hres: uint32
 var vres: VerticalRes
 var vmode: VMode
 var display_depth: DisplayDepth
+# TODO: actually check if it's interlaced
 var interlaced: bool
 var display_disabled: bool
-var gpu_interrupt: bool
+var gp0_interrupt: bool
 var dma_direction: DmaDirection
 
 var rectangle_texture_x_flip: bool
@@ -124,7 +125,7 @@ var image_buffer = ImageBuffer()
 var response: uint32
 
 var cycles: uint32
-var display_line: uint32
+var display_line: uint16
 var vblank_interrupt: bool
 
 proc gpu_read*(): uint32 =
@@ -152,64 +153,55 @@ proc hres_from_fields(hr1: uint8, hr2: uint8): uint32 =
     let v = (hr2 and 1) or ((hr1 and 3) shl 1)
     return uint32(v)
 
+proc in_vblank(): bool =
+    return (display_line < display_line_start) or (display_line >= display_line_end)
+
+proc displayed_vram_line(): uint16 =
+    let offset = case interlaced:
+        of true: display_line * 2 + uint16(ord(field))
+        of false: display_line
+    return (display_vram_y_start + offset) and 0x1FF
+
+
 proc gpu_status*(): uint32 =
     var r = 0'u32
-    r = r or (uint32(page_base_x) shl 0)
-    r = r or (uint32(page_base_y) shl 4)
-    r = r or (uint32(semi_transparency) shl 5)
-    r = r or (uint32(ord(texture_depth)) shl 7)
-    if dithering:
-        r = r or (1'u32 shl 9)
-    else:
-        r = r or (0'u32 shl 9)
-    if draw_to_display:
-        r = r or (1'u32 shl 10)
-    else:
-        r = r or (0'u32 shl 10)
+
+    r = r or (draw_mode and 0x7FF)
+    r = r or (((draw_mode shr 11) and 1) shl 15)
+
     if force_set_mask_bit:
         r = r or (1'u32 shl 11)
-    else:
-        r = r or (0'u32 shl 11)
     if preserve_masked_pixels:
         r = r or (1'u32 shl 12)
-    else:
-        r = r or (0'u32 shl 12)
     r = r or (uint32(ord(field)) shl 13)
-
-    if texture_disable:
-        r = r or (1'u32 shl 15)
-    else:
-        r = r or (0'u32 shl 15)
     r = r or (uint32(hres) shl 16)
     r = r or (uint32(ord(vres)) shl 19)
     r = r or (uint32(ord(vmode)) shl 20)
     r = r or (uint32(ord(display_depth)) shl 21)
     if interlaced:
         r = r or (1'u32 shl 22)
-    else:
-        r = r or (0'u32 shl 22)
     if display_disabled:
         r = r or (1'u32 shl 23)
-    else:
-        r = r or (0'u32 shl 23)
-    if gpu_interrupt:
+    if gp0_interrupt:
         r = r or (1'u32 shl 24)
-    else:
-        r = r or (0'u32 shl 24)
 
     r = r or (1 shl 26)
     r = r or (1 shl 27)
     r = r or (1 shl 28)
 
     r = r or (uint32(ord(dma_direction)) shl 29)
-
-    r = r or (0 shl 28)
+    #r = r or (1 shl 29)
 
     let dma_request = case dma_direction:
         of DmaDirection.Off: 0'u32
         of DmaDirection.Fifo: 1'u32
         of DmaDirection.CpuToGp0: (r shr 28) and 1
         of VRamToCpu: (r shr 27) and 1
+
+    r = r or (1 shl 30)
+
+    if not in_vblank():
+        r = r or uint32(displayed_vram_line() and 1) shl 31
 
     r = r or (uint32(dma_request) shl 25)
     return r
@@ -221,7 +213,7 @@ proc gp0_draw_mode() =
         page_base_y = uint8((gp0_instruction shr 4) and 1)
         semi_transparency = uint8((gp0_instruction shr 5) and 3)
 
-        texture_depth = case (gp0_instruction shr 7) and 3:
+        texture_depth = case ((gp0_instruction shr 7) and 3):
             of 0: TextureDepth.T4Bit
             of 1: TextureDepth.T8Bit
             of 2: TextureDepth.T16Bit
@@ -235,7 +227,7 @@ proc gp0_draw_mode() =
         rectangle_texture_y_flip = ((gp0_instruction shr 13) and 1) != 0
 
 proc gp1_reset() =
-    gpu_interrupt = false
+    gp0_interrupt = false
 
     page_base_x = 0'u8
     page_base_y = 0'u8
@@ -274,6 +266,7 @@ proc gp1_reset() =
     display_line_start = 0x10'u16
     display_line_end = 0x100'u16
     display_depth = DisplayDepth.D15Bits
+    display_line = 0
 
 proc tick_gpu*() =
     cycles += 1
@@ -291,8 +284,13 @@ proc tick_gpu*() =
 
     if display_line == lines_per_frame:
         display_line = 0
+        if interlaced:
+            if field == Field.Top:
+                field = Field.Bottom
+            else:
+                field = Field.Top
 
-    let vblank_int = (display_line < display_line_start) or (display_line >= display_line_end)
+    let vblank_int = in_vblank()
 
     if (not vblank_interrupt) and vblank_int:
         #discard
@@ -300,7 +298,7 @@ proc tick_gpu*() =
 
     if vblank_interrupt and (not vblank_int):
         frame_counter += 1
-        render_frame()
+        #render_frame()
 
     vblank_interrupt = vblank_int
 
@@ -310,24 +308,25 @@ proc gp1_display_mode() =
     let hr2 = uint8((gp1_instruction shr 6) and 1)
     hres = hres_from_fields(hr1, hr2)
 
-    vres = case (gp1_instruction and 0x4) != 0:
+    vres = case ((gp1_instruction and 0x4) != 0):
         of false: VerticalRes.Y240Lines
         of true: VerticalRes.Y480Lines
 
-    vmode = case (gp1_instruction and 0x8) != 0:
+    vmode = case ((gp1_instruction and 0x8) != 0):
         of false: VMode.Ntsc
         of true: VMode.Pal
 
-    display_depth = case (gp1_instruction and 0x10) != 0:
+    display_depth = case ((gp1_instruction and 0x10) != 0):
         of false: DisplayDepth.D24Bits
         of true: DisplayDepth.D15Bits
 
     interlaced = (gp1_instruction and 0x20) != 0
+    field = Field.Top
 
     if (gp1_instruction and 0x80) != 0: quit("Unsupported display mode " & gp1_instruction.toHex(), QuitSuccess)
 
 proc gp1_dma_direction() =
-    dma_direction = case gp1_instruction and 3:
+    dma_direction = case (gp1_instruction and 3):
         of 0: DmaDirection.Off
         of 1: DmaDirection.Fifo
         of 2: DmaDirection.CpuToGp0
@@ -365,6 +364,7 @@ proc gp0_mask_bit_setting() =
 proc gp1_display_vram_start() =
     display_vram_x_start = uint16(gp1_instruction and 0x3FE'u16)
     display_vram_y_start = uint16((gp1_instruction shr 10) and 0x1FF'u16)
+    render_frame()
 
 proc gp1_display_horizontal_range() =
     display_horiz_start = uint16(gp1_instruction and 0xFFF'u16)
@@ -633,9 +633,9 @@ proc gp0_monochrome_triangle() =
             ]
 
         let vertices = [
-            vertex(vec2(cfloat(positions[0][0]), cfloat(positions[0][0])), colors),
-            vertex(vec2(cfloat(positions[1][0]), cfloat(positions[1][0])), colors),
-            vertex(vec2(cfloat(positions[2][0]), cfloat(positions[2][0])), colors),
+            vertex(vec2(cfloat(positions[0][0]), cfloat(positions[0][1])), colors),
+            vertex(vec2(cfloat(positions[1][0]), cfloat(positions[1][1])), colors),
+            vertex(vec2(cfloat(positions[2][0]), cfloat(positions[2][1])), colors),
         ]
 
         push_triangle(vertices)
@@ -725,7 +725,7 @@ proc gp1_get_gpu_info() =
     response = 0x01'u32
 
 proc gp1_acknowledge_irq() =
-    gpu_interrupt = false
+    gp0_interrupt = false
 
 proc gp1_reset_command_buffer() =
     clear_command_buffer(gp0_command)
@@ -791,6 +791,7 @@ proc gp0*(value: uint32) =
             push_word_command_buffer(gp0_command, value)
             if gp0_words_remaining == 0:
                 gp0_command_method()
+                #echo gp0_instruction.toHex()
         of Gp0Mode.ImageLoad:
             push_word_image_buffer(image_buffer, value)
             if gp0_words_remaining == 0:

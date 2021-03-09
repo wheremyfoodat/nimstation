@@ -1,5 +1,5 @@
 import strutils, bitops
-
+import gte_tests
 type
     Matrix = enum
         Rotation = 0,
@@ -72,7 +72,7 @@ var xy_fifo: array[4, (int16, int16)]
 var z_fifo: array[4, uint16]
 var rgb_fifo: array[3, (uint8, uint8, uint8, uint8)]
 var lzcs: uint32 # Input value
-var lzcr: uint8 # Numbers for leading zeroes in lzsc
+var lzcr: uint8 = 32'u8 # Numbers for leading zeroes in lzsc
 var reg_23: uint32
 
 var config_shift: uint8
@@ -82,7 +82,7 @@ var config_vector_mul: uint8
 var config_vector_add: ControlVector
 
 proc control_vector_from_command(command: uint32): ControlVector =
-    case (command shr 13) and 3:
+    case ((command shr 13) and 3):
         of 0: return ControlVector.Translation
         of 1: return ControlVector.BackgroundColor
         of 2: return ControlVector.FarColor
@@ -90,7 +90,7 @@ proc control_vector_from_command(command: uint32): ControlVector =
         else: quit("unreachable", QuitSuccess)
 
 proc matrix_from_command(command: uint32): Matrix =
-    case (command shr 17) and 3:
+    case ((command shr 17) and 3):
         of 0: return Matrix.Rotation
         of 1: return Matrix.Light
         of 2: return Matrix.Color
@@ -114,7 +114,7 @@ proc set_flag(bit: uint8) =
 proc i64_to_i44(flag: uint8, value: int64): int64 =
     if value > 0x7FFFFFFFFFF:
         set_flag(30 - flag)
-    elif value < -0x80000000000:
+    elif value < (-0x80000000000):
         set_flag(27 - flag)
 
     return (value shl (64 - 44)) shr (64 - 44)
@@ -122,62 +122,66 @@ proc i64_to_i44(flag: uint8, value: int64): int64 =
 proc i32_to_i16_saturate(flag: uint8, value: int32): int16 =
     var min = 0'i32
     if not config_clamp_negative:
-        min = int32(int16(-32768))
+        min = cast[int32](int16(-32768))
 
-    let max = int32(int16(32767))
+    let max = cast[int32](int16(32767))
 
     if value > max:
         set_flag(24 - flag)
-        return int16(max)
+        return cast[int16](max)
     elif value < min:
         set_flag(24 - flag)
-        return int16(min)
+        return cast[int16](min)
     else:
-        cast[int16](value)
+        return cast[int16](value)
 
 proc check_mac_overflow(value: int64) =
-    if value < -0x80000000:
+    if value < (-1*0x80000000):
         set_flag(15)
-    elif value > 0x7FFFFFFF:
+    elif value > int64(0x7FFFFFFF):
         set_flag(16)
 
 proc reciprocal(d: uint16): uint32 =
     let index = ((d and 0x7FFF) + 0x40) shr 7
     let factor = cast[int32](UNR_TABLE[index]) + 0x101
-    let d = int32(d or 0x8000)
+    let d = cast[int32](d or 0x8000)
     let tmp = ((d * (factor * -1) ) + 0x80) shr 8
     let r = ((factor * (0x20000 + tmp)) + 0x80) shr 8
     return cast[uint32](r)
 
 proc divide(numerator: uint16, divisor: uint16): uint32 =
-    let shift = countLeadingZeroBits(divisor)
+    var shift = 0
+    if divisor == 0:
+        shift = 16
+    else:
+        shift = countLeadingZeroBits(divisor)
 
-    let n = uint64(numerator) shl shift
+    let n = cast[uint64](numerator) shl shift
     let d = divisor shl shift
 
-    let reciprocal = uint64(reciprocal(d))
+    let reciprocal = cast[uint64](reciprocal(d))
 
     let res = (n * reciprocal + 0x8000) shr 16
 
     if res <= 0x1FFFF:
-        return uint32(res)
+        return cast[uint32](res)
     else:
         return 0x1FFFF
 
 proc i32_to_i11_saturate(flag: uint8, value: int32): int16 =
-    if value < -0x400:
+    if value < (-0x400):
         set_flag(14 - flag)
         return -0x400
-    elif value > 0x3FFF:
+    elif value > 0x3FF:
         set_flag(14 - flag)
         return 0x3FF
     else:
         return cast[int16](value)
 
 proc depth_queuing(projection_factor: uint32) =
-    let factor = int64(projection_factor)
-    let idqa = int64(dqa)
-    let idqb = int64(dqb)
+    let factor = cast[int64](projection_factor)
+    let idqa = cast[int64](dqa)
+    let idqb = cast[int64](dqb)
 
     var depth = idqb + idqa * factor
     check_mac_overflow(depth)
@@ -186,7 +190,7 @@ proc depth_queuing(projection_factor: uint32) =
     depth = depth shr 12
 
     if depth < 0:
-        set_flag(0)
+        set_flag(12)
         ir[0] = 0
     elif depth > 4096:
         set_flag(12)
@@ -212,10 +216,10 @@ proc multiply_matrix_by_vector(matrix: Matrix, vector_index: uint8, control_vect
     for r in 0 ..< 3:
         var res = cast[int64](control_vectors[crv][r]) shl 12
         for c in 0 ..< 3:
-            let v = cast[int64](v[vector_index][c])
-            let m = cast[int64](matrices[mat][r][c])
-            let product = v * m
-            res = i64_to_i44(uint8(r), res + product)
+            let vv = cast[int32](v[vector_index][c])
+            let m = cast[int32](matrices[mat][r][c])
+            let product = vv * m
+            res = i64_to_i44(uint8(r), res + cast[int64](product))
         mac[r + 1] = cast[int32](res shr config_shift)
     mac_to_ir()
 
@@ -228,12 +232,12 @@ proc do_rtp(vector_index: uint8): uint32 =
         var res = cast[int64](control_vectors[tr][r]) shl 12
 
         for c in 0'u8 ..< 3'u8:
-            let v = cast[int64](v[vector_index][c])
-            let m = cast[int64](matrices[rm][c])
+            let vv = cast[int32](v[vector_index][c])
+            let m = cast[int32](matrices[rm][r][c])
 
-            let rot = v * m
+            let rot = vv * m
 
-            res = i64_to_i44(c, int64(res + rot))
+            res = i64_to_i44(c, cast[int64](res + rot))
         mac[r + 1] = cast[int32](res shr config_shift)
         z_shifted = cast[int32](res shr 12)
 
@@ -242,8 +246,8 @@ proc do_rtp(vector_index: uint8): uint32 =
     val = mac[2]
     ir[2] = i32_to_i16_saturate(1, val)
 
-    var min = int32(int16(-32768))
-    let max = int32(int16(32767))
+    var min = cast[int32](int16(-32768))
+    let max = cast[int32](32767'i16)
 
     if (z_shifted > max) or (z_shifted < min):
         set_flag(22)
@@ -264,7 +268,7 @@ proc do_rtp(vector_index: uint8): uint32 =
     if z_shifted < 0:
         set_flag(18)
     elif z_shifted > cast[int32](0xFFFF'u16):
-        set_flag(17)
+        set_flag(18)
         z_saturated = 0xFFFF'u16
     else:
         z_saturated = cast[uint16](z_shifted)
@@ -295,12 +299,23 @@ proc do_rtp(vector_index: uint8): uint32 =
     screen_x = cast[int32](screen_x shr 16)
     screen_y = cast[int32](screen_y shr 16)
 
-    xy_fifo[3] = (i32_to_i11_saturate(0'u8, int32(screen_x)), i32_to_i11_saturate(1'u8, int32(screen_y)))
+    xy_fifo[3] = (i32_to_i11_saturate(0'u8, cast[int32](screen_x)), i32_to_i11_saturate(1'u8, cast[int32](screen_y)))
     xy_fifo[0] = xy_fifo[1]
     xy_fifo[1] = xy_fifo[2]
     xy_fifo[2] = xy_fifo[3]
 
     return projection_factor
+
+proc i64_to_otz(average: int64): uint16 =
+    let value = average shr 12
+    if value < 0:
+        set_flag(18)
+        return 0x0000'u16
+    elif value > 0xFFFF:
+        set_flag(18)
+        return 0xFFFF'u16
+    else:
+        return cast[uint16](value)
 
 proc mac_to_color(mac: int32, which: uint8): uint8 =
     let c = mac shr 4
@@ -311,7 +326,7 @@ proc mac_to_color(mac: int32, which: uint8): uint8 =
         set_flag(21 - which)
         return 0xFF'u8
     else:
-        return uint8(c)
+        return cast[uint8](c)
 
 proc mac_to_rgb_fifo() =
     let r = mac_to_color(mac[1], 0)
@@ -333,13 +348,13 @@ proc cmd_dcpl() =
         let col = cast[int32](col_arr[i]) shl 4
         let shading = cast[int64](col * cur_ir)
         var tmp = fc - shading
-        tmp = cast[int32](i64_to_i44(uint8(i), tmp) shr config_shift)
+        tmp = cast[int32](i64_to_i44(cast[uint8](i), tmp) shr config_shift)
         let ir0 = cast[int64](ir[0])
         let prev_clamp = config_clamp_negative
         config_clamp_negative = false
-        var res = cast[int64](i32_to_i16_saturate(uint8(i), int32(tmp)))
+        var res = cast[int64](i32_to_i16_saturate(i, cast[int32](tmp)))
         config_clamp_negative = prev_clamp
-        res = i64_to_i44(uint8(i), shading + ir0 * res)
+        res = i64_to_i44(i, shading + ir0 * res)
         mac[i + 1] = cast[int32](res shr config_shift)
     mac_to_ir()
     mac_to_rgb_fifo()
@@ -353,19 +368,19 @@ proc do_ncd(vector_index: uint8) =
     cmd_dcpl()
 
 proc cmd_nclip() =
-    var (x0, y0) = (int32(xy_fifo[0][0]), int32(xy_fifo[0][1]))
-    var (x1, y1) = (int32(xy_fifo[1][0]), int32(xy_fifo[1][1]))
-    var (x2, y2) = (int32(xy_fifo[2][0]), int32(xy_fifo[2][1]))
+    var (x0, y0) = (cast[int32](xy_fifo[0][0]), cast[int32](xy_fifo[0][1]))
+    var (x1, y1) = (cast[int32](xy_fifo[1][0]), cast[int32](xy_fifo[1][1]))
+    var (x2, y2) = (cast[int32](xy_fifo[2][0]), cast[int32](xy_fifo[2][1]))
 
     let a = x0 * (y1 - y2)
     let b = x1 * (y2 - y0)
     let c = x2 * (y0 - y1)
 
-    let sum = int64(a) + int64(b) + int64(c)
+    let sum = cast[int64](a) + cast[int64](b) + cast[int64](c)
 
     check_mac_overflow(sum)
 
-    mac[0] = int32(sum)
+    mac[0] = cast[int32](sum)
 
 proc cmd_rtpt() =
     discard do_rtp(0)
@@ -382,6 +397,20 @@ proc cmd_mvmva() =
     v[3][2] = ir[3]
     multiply_matrix_by_vector(config_matrix, config_vector_mul, config_vector_add)
 
+proc cmd_avsz3() =
+    let z1 = cast[uint32](z_fifo[1])
+    let z2 = cast[uint32](z_fifo[2])
+    let z3 = cast[uint32](z_fifo[3])
+
+    let sum = z1 + z2 + z3
+
+    let temp_zsf3 = cast[int64](zsf3)
+    let average = temp_zsf3 * cast[int64](sum)
+
+    check_mac_overflow(average)
+    mac[0] = cast[int32](average)
+    otz = i64_to_otz(average)
+
 
 proc gte_command*(command: uint32) =
     let opcode = command and 0x3F
@@ -389,24 +418,25 @@ proc gte_command*(command: uint32) =
     flags = 0
 
     case opcode:
-        of 0x06: cmd_nclip()
-        of 0x12: cmd_mvmva()
-        of 0x13: cmd_ncds()
-        of 0x30: cmd_rtpt()
+        of 0x06: cmd_nclip()    #Tested
+        #of 0x12: cmd_mvmva()
+        of 0x13: cmd_ncds()     #Tested
+        of 0x2D: cmd_avsz3()    #Tested
+        of 0x30: cmd_rtpt()     #Tested
         else: quit("Unhandled GTE opcode " & opcode.toHex(), QuitSuccess)
 
-    let msb = (flags and 0x7F87E000) != 0
-    if msb:
+    let msb = flags and 0x7F87E000
+    if msb != 0:
         flags = flags or (1 shl 31)
 
 
 proc gte_set_data*(reg: uint32, value: uint32) =
-    let r = uint8(value and 0xFF)
-    let g = uint8((value shr 8) and 0xFF)
-    let b = uint8((value shr 16) and 0xFF)
-    let x = uint8(value shr 24)
+    let r = cast[uint8](value)
+    let g = cast[uint8](value shr 8)
+    let b = cast[uint8](value shr 16)
+    let x = cast[uint8](value shr 24)
 
-    let pos_x = cast[int16](value and 0xFFFF)
+    let pos_x = cast[int16](value)
     let pos_y = cast[int16](value shr 16)
 
     case reg:
@@ -423,7 +453,7 @@ proc gte_set_data*(reg: uint32, value: uint32) =
             v[2][1] = pos_y
         of 5: v[2][2] = pos_x
         of 6: rgb = (r, g, b, x)
-        of 7: otz = uint16(value and 0xFFFF)
+        of 7: otz = cast[uint16](value)
         of 8: ir[0] = pos_x
         of 9: ir[1] = pos_x
         of 10: ir[2] = pos_x
@@ -438,10 +468,10 @@ proc gte_set_data*(reg: uint32, value: uint32) =
             xy_fifo[0] = xy_fifo[1]
             xy_fifo[1] = xy_fifo[2]
             xy_fifo[2] = xy_fifo[3]
-        of 16: z_fifo[0] = uint16(value and 0xFFFF)
-        of 17: z_fifo[1] = uint16(value and 0xFFFF)
-        of 18: z_fifo[2] = uint16(value and 0xFFFF)
-        of 19: z_fifo[3] = uint16(value and 0xFFFF)
+        of 16: z_fifo[0] = cast[uint16](value)
+        of 17: z_fifo[1] = cast[uint16](value)
+        of 18: z_fifo[2] = cast[uint16](value)
+        of 19: z_fifo[3] = cast[uint16](value)
         of 20: rgb_fifo[0] = (r, g, b, x)
         of 21: rgb_fifo[1] = (r, g, b, x)
         of 22: rgb_fifo[2] = (r, g, b, x)
@@ -462,7 +492,10 @@ proc gte_set_data*(reg: uint32, value: uint32) =
                 temp = not value
             else:
                 temp = value
-            lzcr = uint8(countLeadingZeroBits(temp))
+            if temp == 0:
+                lzcr = 32'u8
+            else:
+                lzcr = cast[uint8](countLeadingZeroBits(temp))
         of 31: echo "Write to read-only GTE data register 31"
         else: quit("unreachable", QuitSuccess)
 
@@ -470,8 +503,6 @@ proc gte_set_data*(reg: uint32, value: uint32) =
 
 
 proc gte_set_control*(reg: uint32, value: uint32) =
-    let pos_x = cast[int16](value and 0xFFFF)
-    let pos_y = cast[int16](value shr 16)
     case reg:
         of 0:
             let v0 = cast[int16](value)
@@ -556,21 +587,72 @@ proc gte_set_control*(reg: uint32, value: uint32) =
         of 28: dqb = cast[int32](value)
         of 29: zsf3 = cast[int16](value)
         of 30: zsf4 = cast[int16](value)
+        of 31:
+            flags = value and 0x7FFFF00
+            let msb = value and 0x7F87E000
+            if msb != 0:
+                flags = flags or (1'u32 shl 31)
         else: echo "GTE SET CONTROL ", reg
 
 proc rgbx_to_u32(color: tuple[r: uint8, g: uint8, b: uint8, x: uint8]): uint32 =
-    return uint32(color.r) or (uint32(color.g) shl 8) or (uint32(color.b) shl 16) or (uint32(color.x) shl 24)
+    return cast[uint32](color.r) or (cast[uint32](color.g) shl 8) or (cast[uint32](color.b) shl 16) or (cast[uint32](color.x) shl 24)
+
+proc xy_to_u32(xy: tuple[x: int16, y: int16]): uint32 =
+    return cast[uint32](cast[uint16](xy.x)) or (cast[uint32](cast[uint16](xy.y)) shl 16)
+
+proc data_saturate(v: int16): uint32 =
+    if v < 0:
+        return 0'u32
+    elif v > 0x1F:
+        return 0x1F'u32
+    else:
+        return cast[uint32](v)
 
 proc gte_data*(reg: uint32): uint32 =
     case reg:
-        of 9: return uint32(ir[1])
-        of 10: return uint32(ir[2])
-        of 11: return uint32(ir[3])
+        of 0:
+            let v0 = cast[uint32](cast[uint16](v[0][0]))
+            let v1 = cast[uint32](cast[uint16](v[0][1]))
+            return v0 or (v1 shl 16)
+        of 1: return cast[uint32](v[0][2])
+        of 2:
+            let v0 = cast[uint32](cast[uint16](v[1][0]))
+            let v1 = cast[uint32](cast[uint16](v[1][1]))
+            return v0 or (v1 shl 16)
+        of 3: return cast[uint32](v[1][2])
+        of 4:
+            let v0 = cast[uint32](cast[uint16](v[2][0]))
+            let v1 = cast[uint32](cast[uint16](v[2][1]))
+            return v0 or (v1 shl 16)
+        of 5: return cast[uint32](v[2][2])
+        of 6: return rgbx_to_u32(rgb)
+        of 7: return cast[uint32](otz)
+        of 8: return cast[uint32](ir[0])
+        of 9: return cast[uint32](ir[1])
+        of 10: return cast[uint32](ir[2])
+        of 11: return cast[uint32](ir[3])
+        of 12: return xy_to_u32(xy_fifo[0])
+        of 13: xy_to_u32(xy_fifo[1])
+        of 14: return xy_to_u32(xy_fifo[2])
+        of 15: return xy_to_u32(xy_fifo[3])
+        of 16: return cast[uint32](z_fifo[0])
+        of 17: return cast[uint32](z_fifo[1])
+        of 18: return cast[uint32](z_fifo[2])
+        of 19: return cast[uint32](z_fifo[3])
+        of 20: return rgbx_to_u32(rgb_fifo[0])
+        of 21: return rgbx_to_u32(rgb_fifo[1])
         of 22: return rgbx_to_u32(rgb_fifo[2])
-        of 24: return uint32(mac[0])
-        of 25: return uint32(mac[1])
-        of 26: return uint32(mac[2])
-        of 27: return uint32(mac[3])
+        of 23: return reg_23
+        of 24: return cast[uint32](mac[0])
+        of 25: return cast[uint32](mac[1])
+        of 26: return cast[uint32](mac[2])
+        of 27: return cast[uint32](mac[3])
+        of 28, 29:
+            let a = data_saturate(ir[1] shr 7)
+            let b = data_saturate(ir[2] shr 7)
+            let c = data_saturate(ir[3] shr 7)
+            return a or (b shl 5) or (c shl 10)
+        of 30: return lzcs
         of 31: return cast[uint32](lzcr)
         else:
             echo "GTE DATA ", reg
@@ -579,27 +661,181 @@ proc gte_data*(reg: uint32): uint32 =
 proc gte_control*(reg: uint32): uint32 =
     case reg:
         of 0:
-            let v0 = uint32(matrices[ord(Matrix.Rotation)][0][0])
-            let v1 = uint32(matrices[ord(Matrix.Rotation)][0][1])
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Rotation)][0][0]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Rotation)][0][1]))
             return v0 or (v1 shl 16)
         of 1:
-            let v0 = uint32(matrices[ord(Matrix.Rotation)][0][2])
-            let v1 = uint32(matrices[ord(Matrix.Rotation)][1][0])
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Rotation)][0][2]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Rotation)][1][0]))
             return v0 or (v1 shl 16)
         of 2:
-            let v0 = uint32(matrices[ord(Matrix.Rotation)][1][1])
-            let v1 = uint32(matrices[ord(Matrix.Rotation)][1][2])
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Rotation)][1][1]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Rotation)][1][2]))
             return v0 or (v1 shl 16)
         of 3:
-            let v0 = uint32(matrices[ord(Matrix.Rotation)][2][0])
-            let v1 = uint32(matrices[ord(Matrix.Rotation)][2][1])
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Rotation)][2][0]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Rotation)][2][1]))
             return v0 or (v1 shl 16)
         of 4:
-            return uint32(matrices[ord(Matrix.Rotation)][2][2])
+            return cast[uint32](matrices[ord(Matrix.Rotation)][2][2])
         of 5, 6, 7:
             let index = ord(ControlVector.Translation)
-            return uint32(control_vectors[index][reg - 5])
+            return cast[uint32](control_vectors[index][reg - 5])
+        of 8:
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Light)][0][0]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Light)][0][1]))
+            return v0 or (v1 shl 16)
+        of 9:
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Light)][0][2]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Light)][1][0]))
+            return v0 or (v1 shl 16)
+        of 10:
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Light)][1][1]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Light)][1][2]))
+            return v0 or (v1 shl 16)
+        of 11:
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Light)][2][0]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Light)][2][1]))
+            return v0 or (v1 shl 16)
+        of 12:
+            return cast[uint32](matrices[ord(Matrix.Light)][2][2])
+        of 13, 14, 15:
+            let index = ord(ControlVector.BackgroundColor)
+            return cast[uint32](control_vectors[index][reg - 13])
+        of 16:
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Color)][0][0]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Color)][0][1]))
+            return v0 or (v1 shl 16)
+        of 17:
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Color)][0][2]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Color)][1][0]))
+            return v0 or (v1 shl 16)
+        of 18:
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Color)][1][1]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Color)][1][2]))
+            return v0 or (v1 shl 16)
+        of 19:
+            let v0 = cast[uint32](cast[uint16](matrices[ord(Matrix.Color)][2][0]))
+            let v1 = cast[uint32](cast[uint16](matrices[ord(Matrix.Color)][2][1]))
+            return v0 or (v1 shl 16)
+        of 20:
+            return cast[uint32](matrices[ord(Matrix.Color)][2][2])
+        of 21, 22, 23:
+            let index = ord(ControlVector.FarColor)
+            return cast[uint32](control_vectors[index][reg - 21])
+        of 24: return cast[uint32](ofx)
+        of 25: return cast[uint32](ofy)
+        of 26: return cast[uint32](cast[int16](h))
+        of 27: return cast[uint32](dqa)
+        of 28: return cast[uint32](dqb)
+        of 29: return cast[uint32](zsf3)
+        of 30: return cast[uint32](zsf4)
         of 31: return flags
         else:
             echo "GTE CONTROL ", reg
             return 0x00'u32
+
+
+
+
+
+# Tests and stuff I guess
+proc reset_gte(test: Test, set_regs: bool) =
+    ofx = 0'i32 # Screen offset X
+    ofy = 0'i32 # Screen offset Y
+    h = 0'u16 # Projection plane distance
+    dqa = 0'i16 # Depth queing coeffient
+    dqb = 0'i32 # Depth queing offset
+    zsf3 = 0'i16 # Scale factor for average of 3 Z values
+    zsf4 = 0'i16 # Scale factor for average of 4 Z values
+    matrices = [
+        [[0'i16, 0'i16, 0'i16], [0'i16, 0'i16, 0'i16], [0'i16, 0'i16, 0'i16]],
+        [[0'i16, 0'i16, 0'i16], [0'i16, 0'i16, 0'i16], [0'i16, 0'i16, 0'i16]],
+        [[0'i16, 0'i16, 0'i16], [0'i16, 0'i16, 0'i16], [0'i16, 0'i16, 0'i16]],
+    ]  # Three 3x3 signed matrices
+    control_vectors = [[0'i32, 0'i32, 0'i32], [0'i32, 0'i32, 0'i32], [0'i32, 0'i32, 0'i32], [0'i32, 0'i32, 0'i32]] # Five 3x signed words control vectors
+    flags = 0'u32 # Overflow flags
+
+    # Data
+    v = [[0'i16, 0'i16, 0'i16], [0'i16, 0'i16, 0'i16], [0'i16, 0'i16, 0'i16], [0'i16, 0'i16, 0'i16]] # Vectors 3x3 signed
+    mac = [0'i32, 0'i32, 0'i32, 0'i32] # Accumulators
+    otz = 0'u16 # Z average
+    rgb = (0'u8, 0'u8, 0'u8, 0'u8) # RGB color
+    ir = [0'i16, 0'i16, 0'i16, 0'i16] # Accumulators
+    xy_fifo = [(0'i16, 0'i16), (0'i16, 0'i16), (0'i16, 0'i16), (0'i16, 0'i16)]
+    z_fifo = [0'u16, 0'u16, 0'u16, 0'u16]
+    rgb_fifo = [(0'u8, 0'u8, 0'u8, 0'u8), (0'u8, 0'u8, 0'u8, 0'u8), (0'u8, 0'u8, 0'u8, 0'u8)]
+    lzcs = 0'u32 # Input value
+    lzcr = 32'u8 # Numbers for leading zeroes in lzsc
+    reg_23 = 0'u32
+
+    if set_regs:
+        for (reg, val) in test.reset_controls:
+            gte_set_control(cast[uint32](reg), val)
+
+        for (reg, val) in test.reset_data:
+            if reg == 15:
+                discard
+            elif reg == 28:
+                discard
+            elif reg == 29:
+                discard
+            else:
+                gte_set_data(cast[uint32](reg), val)
+
+proc validate_result(test: Test) =
+    var errors = 0'u32
+    for (reg, val) in test.result_controls:
+        let v = gte_control(uint32(reg))
+        if v != val:
+            echo "Control register ", reg, " expected 0x", val.toHex(), " got 0x", v.toHex()
+            errors += 1
+
+    for (reg, val) in test.result_data:
+        let v = gte_data(uint32(reg))
+        if v != val:
+            echo "Data register ", reg, " expected 0x", val.toHex(), " got 0x", v.toHex()
+            errors += 1
+
+    if errors > 0:
+        echo "Got ", errors, " errors :("
+        quit("", QuitSuccess)
+
+proc gte_ops_test() =
+    for test in TESTS:
+        echo "Test: ", test.desc
+        echo "Command: 0x", test.command.toHex()
+        reset_gte(test, true)
+        gte_command(test.command)
+        validate_result(test)
+
+    reset_gte(TESTS[0], false)
+
+gte_ops_test()
+
+# DIVISION TEST
+
+assert divide(0, 1) == 0
+assert divide(0, 1234) == 0
+assert divide(1, 1) == 0x10000
+assert divide(2, 2) == 0x10000
+assert divide(0xFFFF, 0xFFFF) == 0xFFFF
+assert divide(0xFFFF, 0xFFFE) == 0x10000
+assert divide(1, 2) == 0x8000
+assert divide(1, 3) == 0x5555
+assert divide(5, 6) == 0xd555
+
+assert divide(1, 4) == 0x4000
+assert divide(10, 40) == 0x4000
+assert divide(0xF00, 0xbeef) == 0x141d
+assert divide(9876, 8765) == 0x12072
+assert divide(200, 10000) == 0x51f
+assert divide(0xFFFF, 0x8000) == 0x1FFFE
+assert divide(0xE5D7, 0x72EC) == 0x1FFFF
+
+for i in 0 ..< 0x100'u32:
+    let v = (0x40000 div (i + 0x100) + 1) div 2 - 0x101
+    assert cast[uint32](UNR_TABLE[i]) == v
+assert UNR_TABLE[0xFF] == UNR_TABLE[0x100]
+
+#

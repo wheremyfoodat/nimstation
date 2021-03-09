@@ -1,4 +1,4 @@
-import strutils, os
+import strutils
 import bus, interrupt, timers, counters, cdrom, gte
 
 #enableProfiling()
@@ -9,7 +9,6 @@ var pc = 0xBFC00000'u32
 var next_pc = pc + 4
 var current_instruction: uint32
 var regs: array[32, uint32]
-var out_regs: array[32, uint32]
 var load: (uint32, uint32)
 var function: uint32
 var t: uint32
