@@ -1,7 +1,9 @@
 import streams, strutils
 import cdrom, interrupt, timers
 
-const REGION_MASK = [0xFFFFFFFF'u32, 0xFFFFFFFF'u32, 0xFFFFFFFF'u32, 0xFFFFFFFF'u32, 0x7FFFFFFF'u32, 0x1FFFFFFF'u32, 0xFFFFFFFF'u32, 0xFFFFFFFF'u32]
+# for pointer arithmetics in fastmem stuff
+template `+`*[T](p: ptr T, off: int): ptr T =
+  cast[ptr type(p[])](cast[ByteAddress](p) +% off * sizeof(p[]))
 
 type
     Step = enum
@@ -42,9 +44,34 @@ type
         block_count: uint16
 
 
-var bios: array[524288, char]
+var bios: array[0x80000, uint8]
 var ram: array[0x200000, uint8]
 var scratchpad: array[1024 , uint8]
+
+var s = newFileStream("SCPH1001.BIN", fmRead)
+for i in 0 ..< 0x80000:
+    bios[i] = uint8(s.readChar())
+
+# software fastmem I hope
+const PAGE_SIZE = 64 * 1024 # 64KB pages
+var page_table_r: array[0x10000, ptr(uint8)]
+var page_table_w: array[0x10000, ptr(uint8)]
+
+
+for page_index in 0 ..< 64:
+    let pointer = ram[(page_index * PAGE_SIZE) and 0x1FFFFF].addr
+    page_table_r[page_index + 0x0000] = pointer
+    page_table_r[page_index + 0x8000] = pointer
+    page_table_r[page_index + 0xA000] = pointer
+    page_table_w[page_index + 0x0000] = pointer
+    page_table_w[page_index + 0x8000] = pointer
+    page_table_w[page_index + 0xA000] = pointer
+
+for page_index in 0 ..< 8:
+    let pointer = bios[page_index * PAGE_SIZE].addr
+    page_table_r[page_index + 0x1FC0] = pointer
+    page_table_r[page_index + 0x9FC0] = pointer
+    page_table_r[page_index + 0xBFC0] = pointer
 
 var dma_control = 0x07654321'u32
 var irq_en: bool
@@ -54,12 +81,6 @@ var force_irq: bool
 var irq_dummy: uint8
 var channels = [Channel(), Channel(), Channel(), Channel(), Channel(), Channel(), Channel()]
 
-var bios_pos = 0'u32
-var s = newFileStream("SCPH1001.BIN", fmRead)
-while not s.atEnd:
-    bios[bios_pos] = s.readChar()
-    bios_pos += 1
-
 proc dump_wram*() =
     echo "Dumping wram!"
     var s = newFileStream("wram.bin", fmWrite)
@@ -68,6 +89,7 @@ proc dump_wram*() =
     s.close()
     echo "Done!"
 
+# Import gpu finally, gpu wants access to dump_wram
 import gpu
 
 proc bus_sideload*(sideload_file: string): uint32 =
@@ -86,27 +108,26 @@ proc bus_sideload*(sideload_file: string): uint32 =
 
     var new_pc = 0'u32
     for i in (0 ..< 4):
-        new_pc = new_pc or (uint32(s.readChar()) shl (i * 8))
+        new_pc = new_pc or (cast[uint32](s.readChar()) shl (i * 8))
 
     for i in (0 ..< 4):
         discard s.readChar()
 
     var address = 0'u32
     for i in (0 ..< 4):
-        address = address or (uint32(s.readChar()) shl (i * 8))
+        address = address or (cast[uint32](s.readChar()) shl (i * 8))
 
     var index = address shr 29
-    address = address and REGIONMASK[index]
 
     var size = 0'u32
     for i in (0 ..< 4):
-        size = size or (uint32(s.readChar()) shl (i * 8))
+        size = size or (cast[uint32](s.readChar()) shl (i * 8))
 
     for i in (0 ..< 2016):
         discard s.readChar()
 
     for i in (0 ..< size):
-        ram[address + i] = uint8(s.readChar())
+        ram[address + i] = cast[uint8](s.readChar())
         #address += 1
 
     echo "Magic: ", magic
@@ -116,42 +137,32 @@ proc bus_sideload*(sideload_file: string): uint32 =
     return new_pc
 
 proc ram_store32(offset: uint32, value: uint32) =
-    let b0 = uint8(value and 0xFF)
-    let b1 = uint8((value shr 8) and 0xFF)
-    let b2 = uint8((value shr 16) and 0xFF)
-    let b3 = uint8((value shr 24) and 0xFF)
-    ram[offset + 0] = b0
-    ram[offset + 1] = b1
-    ram[offset + 2] = b2
-    ram[offset + 3] = b3
+    ram[offset + 0] = cast[uint8](value)
+    ram[offset + 1] = cast[uint8](value shr 8)
+    ram[offset + 2] = cast[uint8](value shr 16)
+    ram[offset + 3] = cast[uint8](value shr 24)
 
 proc ram_load32(offset: uint32): uint32 =
-    let b0 = uint32(ram[offset + 0])
-    let b1 = uint32(ram[offset + 1])
-    let b2 = uint32(ram[offset + 2])
-    let b3 = uint32(ram[offset + 3])
+    let b0 = cast[uint32](ram[offset + 0])
+    let b1 = cast[uint32](ram[offset + 1])
+    let b2 = cast[uint32](ram[offset + 2])
+    let b3 = cast[uint32](ram[offset + 3])
     return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
 
 proc channel_control(channel: Channel): uint32 =
     var r = 0'u32
-    r = r or uint32(ord(channel.direction))
-    r = r or uint32(ord(channel.step) shl 1)
+    r = r or cast[uint32](ord(channel.direction))
+    r = r or cast[uint32](ord(channel.step) shl 1)
     if channel.chop:
         r = r or (1 shl 8)
-    else:
-        r = r or (0 shl 8)
-    r = r or uint32(ord(channel.sync) shl 9)
-    r = r or (uint32(channel.chop_dma_sz) shl 16)
-    r = r or (uint32(channel.chop_cpu_sz) shl 20)
+    r = r or cast[uint32](ord(channel.sync) shl 9)
+    r = r or (cast[uint32](channel.chop_dma_sz) shl 16)
+    r = r or (cast[uint32](channel.chop_cpu_sz) shl 20)
     if channel.enable:
         r = r or (1 shl 24)
-    else:
-        r = r or (0 shl 24)
     if channel.trigger:
         r = r or (1 shl 28)
-    else:
-        r = r or (0 shl 28)
-    r = r or (uint32(channel.dummy) shl 29)
+    r = r or (cast[uint32](channel.dummy) shl 29)
 
 proc set_channel_control(channel: Channel, value: uint32) =
     channel.direction = case ((value and 1) != 0):
@@ -170,23 +181,23 @@ proc set_channel_control(channel: Channel, value: uint32) =
         of 2: Sync.LinkedList
         else: quit("Unknown DMA sync mode " & ((value shr 9) and 3).toHex(), QuitSuccess)
 
-    channel.chop_dma_sz = uint8((value shr 16) and 7)
-    channel.chop_cpu_sz = uint8((value shr 20) and 7)
+    channel.chop_dma_sz = cast[uint8]((value shr 16) and 7)
+    channel.chop_cpu_sz = cast[uint8]((value shr 20) and 7)
 
     channel.enable = ((value shr 24) and 1) != 0
     channel.trigger = ((value shr 28) and 1) != 0
 
-    channel.dummy = uint8((value shr 29) and 3)
+    channel.dummy = cast[uint8]((value shr 29) and 3)
 
 proc set_channel_base(channel: Channel, value: uint32) =
     channel.base = value and 0xFFFFFF
 
 proc channel_block_control(channel: Channel): uint32 =
-    return (uint32(channel.block_count) shl 16) or uint32(channel.block_size)
+    return (cast[uint32](channel.block_count) shl 16) or cast[uint32](channel.block_size)
 
 proc set_channel_block_control(channel: Channel, value: uint32) =
-    channel.block_size = uint16(value and 0xFFFF)
-    channel.block_count = uint16(value shr 16)
+    channel.block_size = cast[uint16](value and 0xFFFF)
+    channel.block_count = cast[uint16](value shr 16)
 
 proc channel_active(channel: Channel): bool =
     let trigger = case channel.sync:
@@ -194,33 +205,23 @@ proc channel_active(channel: Channel): bool =
         else: true
     return channel.enable and trigger
 
-proc mask_region(address: uint32): uint32 =
-    let index = address shr 29
-    return address and REGION_MASK[index]
-
 proc irq(): bool =
     let channel_irq = channel_irq_flags and channel_irq_en
     return force_irq or (irq_en and (channel_irq != 0))
 
 proc interrupt(): uint32 =
     var r = 0'u32
-    r = r or uint32(irq_dummy)
+    r = r or cast[uint32](irq_dummy)
     if force_irq:
         r = r or (1 shl 15)
-    else:
-        r = r or (0 shl 15)
 
-    r = r or (uint32(channel_irq_en) shl 16)
+    r = r or (cast[uint32](channel_irq_en) shl 16)
     if irq_en:
         r = r or (1 shl 23)
-    else:
-        r = r or (0 shl 23)
 
-    r = r or (uint32(channel_irq_flags) shl 24)
+    r = r or (cast[uint32](channel_irq_flags) shl 24)
     if irq():
         r = r or (1 shl 31)
-    else:
-        r = r or (0 shl 31)
 
 proc set_interrupt(value: uint32) =
     let prev_irq = irq()
@@ -248,8 +249,8 @@ proc port_from_index(index: uint32): Port =
 
 proc transfer_size(channel: Channel): uint32 =
     case channel.sync:
-        of Sync.Manual: return uint32(channel.block_size)
-        of Sync.Request: return uint32(channel.block_size * channel.block_count)
+        of Sync.Manual: return cast[uint32](channel.block_size)
+        of Sync.Request: return cast[uint32](channel.block_size * channel.block_count)
         else: quit("whats", QuitSuccess)
 
 proc channel_done(channel: Channel, port: uint32) =
@@ -270,7 +271,6 @@ proc do_dma_block(channel: Channel, port_num: uint32) =
 
     var address = channel.base
     var remsz = transfer_size(channel)
-    #echo "Starting block DMA size 0x", remsz.toHex()
     while remsz > 0:
         let cur_addr = address and 0x1FFFFC'u32
         case channel.direction:
@@ -294,7 +294,6 @@ proc do_dma_block(channel: Channel, port_num: uint32) =
     channel_done(channel, port_num)
 
 proc do_dma_linked_list(channel: Channel, port_num: uint32) =
-    #echo "Starting linked list DMA"
     let port = port_from_index(port_num)
     var address = channel.base and 0x1FFFFC'u32
     if channel.direction == Direction.ToRam:
@@ -366,223 +365,192 @@ proc set_dma_reg(offset: uint32, value: uint32) =
     if active_port != 0xFF'u8:
         do_dma(major)
 
+# LOADS/STORES
+
+proc load32_io(address: uint32): uint32 =
+    if address in 0x1F801000'u32 ..< 0x1F801024'u32: # MEMCONTROL
+        return 0x00'u32
+    elif address == 0x1F801060'u32:  # RAM_SIZE
+        return 0x00000B88'u32
+    elif address in 0x1F801070'u32 ..< 0x1F801078'u32: # IRQ
+        case address:
+            of 0x1F801070: return get_irq_status()
+            of 0x1F801074: return get_irq_mask()
+            else:  quit("Invalid irq read32 address " & address.toHex(), QuitSuccess)
+    elif address in 0x1F801080'u32 ..< 0x1F801100'u32: # DMA
+         return dma_reg(address - 0x1F801080'u32)
+    elif address in 0x1F801100'u32 ..< 0x1F801130'u32: # TIMERS
+        return timers_load32(address - 0x1F801100'u32)
+    elif address in 0x1F801810'u32 ..< 0x1F801818'u32: # GPU
+        case address:
+            of 0x1F801810: return gpu_read()
+            of 0x1F801814: return gpu_status()
+            else: return 0x00'u32
+    else: quit("Unhandled address32 " & address.toHex(), QuitSuccess)
+
+proc load16_io(address: uint32): uint16 =
+    if address in 0x1F801040'u32 ..< 0x1F801060'u32: # PADMEM
+        return 0xFFFF'u16
+    elif address in 0x1F801070'u32 ..< 0x1F801078'u32: # IRQCONTROL
+        case address:
+            of 0x1F801070: return get_irq_status()
+            of 0x1F801074: return get_irq_mask()
+            else: quit("Invalid irq read16 address " & address.toHex(), QuitSuccess)
+    elif address in 0x1F801100'u32 ..< 0x1F801130'u32: # TIMERS
+        return 0x00'u16
+    elif address in 0x1F801C00'u32 ..< 0x1F801E80'u32: # SPU
+        return 0x00'u16
+    else: quit("Unhandled address16 " & address.toHex(), QuitSuccess)
+
+proc load8_io(address: uint32): uint8 =
+
+    if address in 0x1F000000'u32 ..< 0x1F080000'u32: # Expansion
+        return 0xFF'u8
+    elif address in 0x1F801040'u32 ..< 0x1F801060'u32: # PADMEM
+        return 0xFF'u8
+    elif address in 0x1F801800'u32 ..< 0x1F801804'u32: # CDROM
+        return cdrom_load8(address - 0x1F801800'u32)
+    else: quit("Unhandled address8 " & address.toHex(), QuitSuccess)
 
 proc load32*(address: uint32): uint32 =
-    if (address mod 4) != 0:
-        quit("Unaligned load32 address " & address.toHex(), QuitSuccess)
-    var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00800000'u32: # RAM
-        offset = offset and 0x001FFFFF
-        return ram_load32(offset)
-    elif offset in 0x1F800000'u32 ..< 0x1F800400'u32: # SCRATCHPAD
-        offset -= 0x1F800000'u32
-        let b0 = uint32(scratchpad[offset + 0])
-        let b1 = uint32(scratchpad[offset + 1])
-        let b2 = uint32(scratchpad[offset + 2])
-        let b3 = uint32(scratchpad[offset + 3])
-        return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
-    elif offset in 0x1F801000'u32 ..< 0x1F801024'u32: # MEMCONTROL
-        return 0x00'u32
-    elif offset in 0x1F801810'u32 ..< 0x1F801818'u32: # GPU
-        offset -= 0x1F801810'u32
-        case offset:
-            of 0: return gpu_read()
-            of 4: return gpu_status()
-            else: return 0x00'u32
-    elif offset == 0x1F801060'u32: return 0x00000B88'u32 # RAM_SIZE
-    elif offset in 0x1F801070'u32 ..< 0x1F801078'u32:
-        offset -= 0x1F801070'u32
-        case offset:
-            of 0: return get_irq_status()
-            of 4: return get_irq_mask()
-            else:  quit("Invalid irq read32 address " & offset.toHex(), QuitSuccess)
-    elif offset in 0x1F801080'u32 ..< 0x1F801100'u32: # DMA
-        offset -= 0x1F801080'u32
-        return dma_reg(offset)
-    elif offset in 0x1F801100'u32 ..< 0x1F801130'u32: # TIMERS
-        offset -= 0x1F801100'u32
-        return timers_load32(offset)
-    elif offset in 0x1FC00000'u32 ..< 0x1FC80000'u32: # BIOS
-        offset -= 0x1FC00000'u32
-        let b0 = uint32(bios[offset + 0])
-        let b1 = uint32(bios[offset + 1])
-        let b2 = uint32(bios[offset + 2])
-        let b3 = uint32(bios[offset + 3])
-        return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+    let page = address shr 16 # divide by 64 to get the page number
+    let offset = int(address and 0xFFFF) # offset in page
+    let pointer = page_table_r[page] # actual pointer
 
-    quit("Invalid read32 address " & address.toHex(), QuitSuccess)
+    if pointer != nil:
+        return cast[ptr uint32](pointer + offset)[]
+    else:
+        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80):
+            if (offset < 0x400) and (page != 0xBF80):
+                let b0 = cast[uint32](scratchpad[offset + 0])
+                let b1 = cast[uint32](scratchpad[offset + 1])
+                let b2 = cast[uint32](scratchpad[offset + 2])
+                let b3 = cast[uint32](scratchpad[offset + 3])
+                return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+            else:
+                return load32_io(address)
 
 proc load16*(address: uint32): uint16 =
-    var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00800000'u32: # RAM
-        offset = offset and 0x001FFFFF'u32
-        let b0 = uint16(ram[offset + 0])
-        let b1 = uint16(ram[offset + 1])
-        return b0 or (b1 shl 8)
-    elif offset in 0x1F800000'u32 ..< 0x1F800400'u32: # SCRATCHPAD
-        offset -= 0x1F800000'u32
-        let b0 = uint16(scratchpad[offset + 0])
-        let b1 = uint16(scratchpad[offset + 1])
-        return b0 or (b1 shl 8)
-    elif offset in 0x1F801040'u32 ..< 0x1F801060'u32: # PADMEM
-        #echo "padmem load16"
-        offset -= 0x1F801040'u32
-        return 0xFFFF'u16
-    elif offset in 0x1F801070'u32 ..< 0x1F801078'u32: # IRQCONTROL
-        offset -= 0x1F801070'u32
-        case offset:
-            of 0: return get_irq_status()
-            of 4: return get_irq_mask()
-            else: quit("Invalid irq read16 address " & offset.toHex(), QuitSuccess)
-    elif offset in 0x1F801100'u32 ..< 0x1F801130'u32: # TIMERS
-        return 0x00'u16
-    elif offset in 0x1F801C00'u32 ..< 0x1F801E80'u32: # SPU
-        #echo "Unhandled read from SPU register ", offset.toHex()
-        return 0x00'u16
-    quit("Invalid read16 address " & address.toHex(), QuitSuccess)
+    let page = address shr 16 # divide by 64 to get the page number
+    let offset = int(address and 0xFFFF) # offset in page
+    let pointer = page_table_r[page] # actual pointer
+
+    if pointer != nil:
+        return cast[ptr uint16](pointer + offset)[]
+    else:
+        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80):
+            if (offset < 0x400) and (page != 0xBF80):
+                let b0 = cast[uint16](scratchpad[offset + 0])
+                let b1 = cast[uint16](scratchpad[offset + 1])
+                return b0 or (b1 shl 8)
+            else:
+                return load16_io(address)
 
 proc load8*(address: uint32): uint8 =
-    var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00800000'u32: # RAM
-        offset = offset and 0x001FFFFF'u32
-        return uint8(ram[offset])
-    elif offset in 0x1F000000'u32 ..< 0x1F080000'u32: # Expansion
-        return 0xFF'u8
-    elif offset in 0x1F800000'u32 ..< 0x1F800400'u32: # SCRATCHPAD
-        offset -= 0x1F800000'u32
-        let b0 = uint8(scratchpad[offset + 0])
-        return b0
-    elif offset in 0x1F801040'u32 ..< 0x1F801060'u32: # PADMEM
-        offset -= 0x1F801040'u32
-        #echo "padmem load8"
-        return 0xFF'u8
-    elif offset in 0x1F801800'u32 ..< 0x1F801804'u32: # CDROM
-        offset -= 0x1F801800'u32
-        return cdrom_load8(offset)
-    elif offset in 0x1FC00000'u32 ..< 0x1FC80000'u32: # BIOS
-        offset -= 0x1FC00000'u32
-        return uint8(bios[offset])
-    quit("Invalid read8 address " & address.toHex(), QuitSuccess)
+    let page = address shr 16 # divide by 64 to get the page number
+    let offset = int(address and 0xFFFF) # offset in page
+    let pointer = page_table_r[page] # actual pointer
 
+    if pointer != nil:
+        return (pointer + offset)[]
+    else:
+        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80):
+            if (offset < 0x400) and (page != 0xBF80):
+                return scratchpad[offset]
+            else:
+                return load8_io(address)
+
+proc store32_io(address: uint32, value: uint32) =
+    if address in 0x1F801000'u32 ..< 0x1F801024'u32:
+        case address:
+            of 0x1F801000:
+                if value != 0x1F000000: quit("Bad expansion 1 base address 0x" & value.toHex(), QuitSuccess)
+            of 0x1F801004:
+                if value != 0x1F802000: quit("Bad expansion 2 base address 0x" & value.toHex(), QuitSuccess)
+            else: discard #echo "Unhandled write to MEMCONTROL register"
+    elif address in 0x1F801060'u32 ..< 0x1F801064'u32: discard
+    elif address in 0x1F801070'u32 ..< 0x1F801078'u32: #IRQCONTROL
+        case address:
+            of 0x1F801070: irq_ack(cast[uint16](value))
+            of 0x1F801074: irq_set_mask(cast[uint16](value))
+            else: quit("Invalid irq store32 address " & address.toHex(), QuitSuccess)
+    elif address in 0x1F801080'u32 ..< 0x1F801100'u32: # DMA
+        set_dma_reg(address - 0x1F801080'u32, value)
+    elif address in 0x1F801100'u32 ..< 0x1F801130'u32: # TIMERS
+        timers_store16(address - 0x1F801100'u32, cast[uint16](value))
+    elif address in 0x1F801810'u32 ..< 0x1F801818'u32: # GPU
+        case address:
+            of 0x1F801810: gp0(value)
+            of 0x1F801814: gp1(value)
+            else: quit("Unhandled GPU write " & address.toHex() & " " & value.toHex(), QuitSuccess)
+    elif address in 0xFFFE0130'u32 ..< 0xFFFE0134'u32: discard # CACHECONTROL
+    else: quit("Unhandled store32io " & address.toHex(), QuitSuccess)
+
+proc store16_io(address: uint32, value: uint16) =
+    if address in 0x1F801040'u32 ..< 0x1F801060'u32: discard # PADMEM
+    elif address in 0x1F801070'u32 ..< 0x1F801078'u32: # IRQCONTROL
+        case address:
+            of 0x1F801070: irq_ack(value)
+            of 0x1F801074: irq_set_mask(value)
+            else: quit("Invalid irq store32 address " & address.toHex(), QuitSuccess)
+    elif address in 0x1F801100'u32 ..< 0x1F801130'u32: # TIMERS
+        timers_store16(address - 0x1F801100'u32, cast[uint16](value))
+    elif address in 0x1F801C00'u32 ..< 0x1F801E80'u32: discard # SPU
+    else: quit("Unhandled store16io " & address.toHex(), QuitSuccess)
+
+
+proc store8_io(address: uint32, value: uint8) =
+    if address == 0x1F801040'u32: discard # JOYDATA
+    elif address in 0x1F801800'u32 ..< 0x1F801804'u32: # CDROM
+        cdrom_store8(address - 0x1F801800'u32, value)
+    elif address in 0x1F802000'u32 ..< 0x1F802042'u32: discard # Expansion 2
+    elif address == 0x1F802080'u32: # PCSX register
+        stdout.write char(value)
+        return
+    else: quit("Unhandled store8io " & address.toHex(), QuitSuccess)
 
 proc store32*(address: uint32, value: uint32) =
-    if (address mod 4) != 0:
-        quit("Unaligned store32 address " & address.toHex(), QuitSuccess)
+    let page = address shr 16 # divide by 64 to get the page number
+    let offset = int(address and 0xFFFF) # offset in page
+    let pointer = page_table_r[page] # actual pointer
 
-    var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00800000'u32:
-        offset = offset and 0x001FFFFF'u32
-        ram_store32(offset, value)
-        return
-    elif offset in 0x1F800000'u32 ..< 0x1F800400'u32: # SCRATCHPAD
-        offset -= 0x1F800000'u32
-        let b0 = uint8(value and 0xFF)
-        let b1 = uint8((value shr 8) and 0xFF)
-        let b2 = uint8((value shr 16) and 0xFF)
-        let b3 = uint8((value shr 24) and 0xFF)
-        scratchpad[offset + 0] = b0
-        scratchpad[offset + 1] = b1
-        scratchpad[offset + 2] = b2
-        scratchpad[offset + 3] = b3
-        return
-    elif offset in 0x1F801000'u32 ..< 0x1F801024'u32:
-        offset -= 0x1F801000'u32
-        case offset:
-            of 0:
-                if value != 0x1F000000:
-                    quit("Bad expansion 1 base address 0x" & value.toHex(), QuitSuccess)
-            of 4:
-                if value != 0x1F802000:
-                    quit("Bad expansion 2 base address 0x" & value.toHex(), QuitSuccess)
-            else: discard #echo "Unhandled write to MEMCONTROL register"
-        return
-    elif offset in 0x1F801060'u32 ..< 0x1F801064'u32: return
-    elif offset in 0x1F801070'u32 ..< 0x1F801078'u32:
-        offset -= 0x1F801070'u32
-        case offset:
-            of 0: irq_ack(cast[uint16](value))
-            of 4: irq_set_mask(cast[uint16](value))
-            else: quit("Invalid irq store32 address " & offset.toHex(), QuitSuccess)
-        return
-    elif offset in 0x1F801080'u32 ..< 0x1F801100'u32: # DMA
-        offset -= 0x1F801080'u32
-        set_dma_reg(offset, value)
-        return
-    elif offset in 0x1F801100'u32 ..< 0x1F801130'u32: # TIMERS
-        offset -= 0x1F801100'u32
-        timers_store16(offset, uint16(value and 0xFFFF'u16))
-        return
-    elif offset in 0x1F801810'u32 ..< 0x1F801818'u32: # GPU
-        offset -= 0x1F801810'u32
-        case offset:
-            of 0: gp0(value)
-            of 4: gp1(value)
-            else: quit("GPU write " & offset.toHex() & " " & value.toHex(), QuitSuccess)
-        return
-    elif address in 0xFFFE0130'u32 ..< 0xFFFE0134'u32:
-        #echo "Unhandled write to CACHECONTROL ", value.toHex()
-        return
-    quit("Unhandled store32 into address " & address.toHex() & " value " & value.to_hex(), QuitSuccess)
+    if pointer != nil:
+        cast[ptr uint32](pointer + offset)[] = value
+    else:
+        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80):
+            if (offset < 0x400) and (page != 0xBF80):
+                scratchpad[offset + 0] = cast[uint8](value)
+                scratchpad[offset + 1] = cast[uint8](value shr 8)
+                scratchpad[offset + 2] = cast[uint8](value shr 16)
+                scratchpad[offset + 3] = cast[uint8](value shr 24)
+            else:
+                store32_io(address, value)
 
 proc store16*(address: uint32, value: uint16) =
-    if (address mod 2) != 0:
-        quit("Unaligned store16 address " & address.toHex(), QuitSuccess)
-    var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00800000'u32: # RAM
-        offset = offset and 0x001FFFFF'u32
-        let b0 = uint8(value and 0xFF)
-        let b1 = uint8((value shr 8) and 0xFF)
-        ram[offset + 0] = b0
-        ram[offset + 1] = b1
-        return
-    elif offset in 0x1F800000'u32 ..< 0x1F800400'u32: # SCRATCHPAD
-        offset -= 0x1F800000'u32
-        let b0 = uint8(value and 0xFF)
-        let b1 = uint8((value shr 8) and 0xFF)
-        scratchpad[offset + 0] = b0
-        scratchpad[offset + 1] = b1
-        return
-    elif offset in 0x1F801040'u32 ..< 0x1F801060'u32: # PADMEM
-        offset -= 0x1F801040'u32
-        #echo "PADMEM store16 ", offset.toHex()
-        return
-    elif offset in 0x1F801070'u32 ..< 0x1F801078'u32: # IRQCONTROL
-        offset -= 0x1F801070'u32
-        case offset:
-            of 0: irq_ack(value)
-            of 4: irq_set_mask(value)
-            else: quit("Invalid irq store32 address " & offset.toHex(), QuitSuccess)
-        return
-    elif offset in 0x1F801100'u32 ..< 0x1F801130'u32: # TIMERS
-        offset -= 0x1F801100'u32
-        timers_store16(offset, uint16(value and 0xFFFF'u16))
-        return
-    elif offset in 0x1F801C00'u32 ..< 0x1F801E80'u32:
-        #echo "Unhandled write to SPU register ", offset.toHex()
-        return
-    quit("Unhandled store16 into address " & address.toHex() & " value " & value.to_hex(), QuitSuccess)
+    let page = address shr 16 # divide by 64 to get the page number
+    let offset = int(address and 0xFFFF) # offset in page
+    let pointer = page_table_r[page] # actual pointer
+
+    if pointer != nil:
+        cast[ptr uint16](pointer + offset)[] = value
+    else:
+        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80):
+            if (offset < 0x400) and (page != 0xBF80):
+                scratchpad[offset + 0] = cast[uint8](value)
+                scratchpad[offset + 1] = cast[uint8](value shr 8)
+            else:
+                store16_io(address, value)
 
 proc store8*(address: uint32, value: uint8) =
-    var offset = mask_region(address)
-    if offset in 0x00000000'u32 ..< 0x00800000'u32: # RAM
-        offset = offset and 0x001FFFFF'u32
-        ram[offset] = value
-        return
-    elif offset in 0x1F800000'u32 ..< 0x1F800400'u32: # SCRATCHPAD
-        offset -= 0x1F800000'u32
-        scratchpad[offset + 0] = value
-        return
-    elif offset in 0x1F801800'u32 ..< 0x1F801804'u32: # CDROM
-        offset -= 0x1F801800'u32
-        cdrom_store8(offset, value)
-        return
-    elif offset in 0x1F802000'u32 ..< 0x1F802042'u32:
-        #echo "Unhandled write to expansion 2 register ", offset.toHex()
-        return
-    elif offset == 0x1F802080'u32:
-        stdout.write char(value) # PCSX register
-        return
-    elif offset == 0x1F801040'u32: # JOYDATA
-        return
-    #echo "Unhandled store8 into address " & address.toHex() & " value " & value.to_hex()
-    quit("Unhandled store8 into address " & address.toHex() & " value " & value.to_hex(), QuitSuccess)
+    let page = address shr 16 # divide by 64 to get the page number
+    let offset = int(address and 0xFFFF) # offset in page
+    let pointer = page_table_r[page] # actual pointer
+
+    if pointer != nil:
+        (pointer + offset)[] = value
+    else:
+        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80):
+            if (offset < 0x400) and (page != 0xBF80):
+                scratchpad[offset + 0] = cast[uint8](value)
+            else:
+                store8_io(address, value)
