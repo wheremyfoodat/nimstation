@@ -95,8 +95,29 @@ proc get_texel_8bit(x: uint32, y: uint32): uint16 =
 proc get_texel_16bit(x: uint32, y: uint32): uint16 =
     return vram[page_y + y][page_x + x]
 
-proc render_frame*() =
+proc parse_events*() =
+    #discard
+    var event: Event
+    while window.pollEvent(event):
+        case event.kind:
+            of EventType.Closed:
+                window.close()
+                vertex_array.destroy()
+                textures.destroy()
+                vram_sprite.destroy()
+                quit()
+            of EventType.KeyPressed:
+                case event.key.code:
+                    of KeyCode.F1:
+                        cdrom_debug = not cdrom_debug
+                    of KeyCode.F2:
+                        dump_wram()
+                    of KeyCode.F3:
+                        dump_regs = not dump_regs
+                    else: discard
+            else: discard
 
+proc render_frame*() =
     if (nvertices > 0) or (ntextures > 0):
         #window.clear Black
         window.draw(vram_sprite)
@@ -116,31 +137,10 @@ proc render_frame*() =
         nvertices = 0
         ntextures = 0
 
-proc parse_events*() =
-    var event: Event
-    while window.pollEvent(event):
-        case event.kind:
-            of EventType.Closed:
-                window.close()
-                vertex_array.destroy()
-                textures.destroy()
-                vram_sprite.destroy()
-                quit()
-            of EventType.KeyPressed:
-                case event.key.code:
-                    of KeyCode.F1:
-                        cdrom_debug = not cdrom_debug
-                    of KeyCode.F2:
-                        dump_wram()
-                    of KeyCode.F3:
-                        dump_regs = not dump_regs
-                    of KeyCode.F4:
-                        nvertices = 1
-                        render_frame()
-                    else: discard
-            else: discard
+
 
 proc push_triangle*(vertices: array[3, Vertex]) =
+    #discard
     if (nvertices + 3) > VERTEX_BUFFER_LEN:
         render_frame()
 
@@ -149,6 +149,7 @@ proc push_triangle*(vertices: array[3, Vertex]) =
         nvertices += 1
 
 proc push_quad*(vertices: array[4, Vertex]) =
+    #discard
     if (nvertices + 6) > VERTEX_BUFFER_LEN:
         render_frame()
 
@@ -161,6 +162,7 @@ proc push_quad*(vertices: array[4, Vertex]) =
         nvertices += 1
 
 proc push_texture*(positions: array[4, tuple[x: int16, y: int16]], tex_x: uint8, tex_y: uint8, opacity: uint8) =
+    #discard
     let x_len = positions[1].x -% positions[0].x
     let y_len = positions[2].y -% positions[0].y
     var quad_texture = newTexture(x_len, y_len)

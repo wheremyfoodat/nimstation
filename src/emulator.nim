@@ -24,5 +24,3 @@ while true:
     tick_gpu()
     run_next_instruction()
     tick_gpu()
-    parse_events()
-    #render_frame()

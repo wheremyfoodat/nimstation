@@ -128,6 +128,14 @@ var cycles: uint32
 var display_line: uint16
 var vblank_interrupt: bool
 
+var ticks_per_line = case vmode:
+    of VMode.Ntsc: 3412'u32
+    of VMode.Pal: 3404'u32
+
+var lines_per_frame = case vmode:
+    of VMode.Ntsc: 263'u32
+    of VMode.Pal: 314'u32
+
 proc gpu_read*(): uint32 =
     let resp = response
     response = 0x00'u32
@@ -161,6 +169,33 @@ proc displayed_vram_line(): uint16 =
         of true: display_line * 2 + uint16(ord(field))
         of false: display_line
     return (display_vram_y_start + offset) and 0x1FF
+
+proc tick_gpu*() =
+    cycles += 1
+
+    if cycles == ticks_per_line:
+        display_line += 1
+        cycles = 0
+
+        if display_line == lines_per_frame:
+            display_line = 0
+            if interlaced:
+                if field == Field.Top:
+                    field = Field.Bottom
+                else:
+                    field = Field.Top
+
+    let vblank_int = in_vblank()
+
+    if (not vblank_interrupt) and vblank_int:
+        #discard
+        pend_irq(30, Interrupt.VBlank)
+
+    if vblank_interrupt and (not vblank_int):
+        frame_counter += 1
+        parse_events()
+
+    vblank_interrupt = vblank_int
 
 
 proc gpu_status*(): uint32 =
@@ -260,6 +295,9 @@ proc gp1_reset() =
     vres = VerticalRes.Y240Lines
 
     vmode = VMode.Ntsc
+    ticks_per_line = 3412'u32
+    lines_per_frame = 263'u32
+
     interlaced = true
     display_horiz_start = 0x200'u16
     display_horiz_end = 0xC00'u16
@@ -267,40 +305,6 @@ proc gp1_reset() =
     display_line_end = 0x100'u16
     display_depth = DisplayDepth.D15Bits
     display_line = 0
-
-proc tick_gpu*() =
-    cycles += 1
-    let ticks_per_line = case vmode:
-        of VMode.Ntsc: 3412'u32
-        of VMode.Pal: 3404'u32
-
-    let lines_per_frame = case vmode:
-        of VMode.Ntsc: 263'u32
-        of VMode.Pal: 314'u32
-
-    if cycles == ticks_per_line:
-        display_line += 1
-        cycles = 0
-
-    if display_line == lines_per_frame:
-        display_line = 0
-        if interlaced:
-            if field == Field.Top:
-                field = Field.Bottom
-            else:
-                field = Field.Top
-
-    let vblank_int = in_vblank()
-
-    if (not vblank_interrupt) and vblank_int:
-        #discard
-        pend_irq(30, Interrupt.VBlank)
-
-    if vblank_interrupt and (not vblank_int):
-        frame_counter += 1
-        #render_frame()
-
-    vblank_interrupt = vblank_int
 
 
 proc gp1_display_mode() =
@@ -313,8 +317,14 @@ proc gp1_display_mode() =
         of true: VerticalRes.Y480Lines
 
     vmode = case ((gp1_instruction and 0x8) != 0):
-        of false: VMode.Ntsc
-        of true: VMode.Pal
+        of false:
+            ticks_per_line = 3412'u32
+            lines_per_frame = 263'u32
+            VMode.Ntsc
+        of true:
+            ticks_per_line = 3404'u32
+            lines_per_frame = 314'u32
+            VMode.Pal
 
     display_depth = case ((gp1_instruction and 0x10) != 0):
         of false: DisplayDepth.D24Bits
