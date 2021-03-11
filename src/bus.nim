@@ -5,6 +5,8 @@ import cdrom, interrupt, timers
 template `+`*[T](p: ptr T, off: int): ptr T =
   cast[ptr type(p[])](cast[ByteAddress](p) +% off * sizeof(p[]))
 
+const REGION_MASK = [0xFFFFFFFF'u32, 0xFFFFFFFF'u32, 0xFFFFFFFF'u32, 0xFFFFFFFF'u32, 0x7FFFFFFF'u32, 0x1FFFFFFF'u32, 0xFFFFFFFF'u32, 0xFFFFFFFF'u32]
+
 type
     Step = enum
         Increment = 0,
@@ -49,16 +51,21 @@ var ram: array[0x200000, uint8]
 var scratchpad: array[1024 , uint8]
 
 var s = newFileStream("SCPH1001.BIN", fmRead)
-for i in 0 ..< 0x80000:
-    bios[i] = uint8(s.readChar())
+var bios_pos = 0'u32
+while not s.atEnd:
+    bios[bios_pos] = uint8(s.readChar())
+    bios_pos += 1
 
 # software fastmem I hope
 const PAGE_SIZE = 64 * 1024 # 64KB pages
 var page_table_r: array[0x10000, ptr(uint8)]
 var page_table_w: array[0x10000, ptr(uint8)]
 
+for i in 0 ..< 0x10000:
+    page_table_r[i] = nil
+    page_table_w[i] = nil
 
-for page_index in 0 ..< 64:
+for page_index in 0 ..< 128:
     let pointer = ram[(page_index * PAGE_SIZE) and 0x1FFFFF].addr
     page_table_r[page_index + 0x0000] = pointer
     page_table_r[page_index + 0x8000] = pointer
@@ -118,6 +125,7 @@ proc bus_sideload*(sideload_file: string): uint32 =
         address = address or (cast[uint32](s.readChar()) shl (i * 8))
 
     var index = address shr 29
+    address = address and REGIONMASK[index]
 
     var size = 0'u32
     for i in (0 ..< 4):
@@ -135,19 +143,6 @@ proc bus_sideload*(sideload_file: string): uint32 =
     echo "Sideloading done!"
 
     return new_pc
-
-proc ram_store32(offset: uint32, value: uint32) =
-    ram[offset + 0] = cast[uint8](value)
-    ram[offset + 1] = cast[uint8](value shr 8)
-    ram[offset + 2] = cast[uint8](value shr 16)
-    ram[offset + 3] = cast[uint8](value shr 24)
-
-proc ram_load32(offset: uint32): uint32 =
-    let b0 = cast[uint32](ram[offset + 0])
-    let b1 = cast[uint32](ram[offset + 1])
-    let b2 = cast[uint32](ram[offset + 2])
-    let b3 = cast[uint32](ram[offset + 3])
-    return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
 
 proc channel_control(channel: Channel): uint32 =
     var r = 0'u32
@@ -196,7 +191,7 @@ proc channel_block_control(channel: Channel): uint32 =
     return (cast[uint32](channel.block_count) shl 16) or cast[uint32](channel.block_size)
 
 proc set_channel_block_control(channel: Channel, value: uint32) =
-    channel.block_size = cast[uint16](value and 0xFFFF)
+    channel.block_size = cast[uint16](value)
     channel.block_count = cast[uint16](value shr 16)
 
 proc channel_active(channel: Channel): bool =
@@ -275,7 +270,11 @@ proc do_dma_block(channel: Channel, port_num: uint32) =
         let cur_addr = address and 0x1FFFFC'u32
         case channel.direction:
             of Direction.FromRam:
-                let src_word = ram_load32(cur_addr)
+                # Let's use fastmem for DMA aswell
+                let page = address shr 16 # divide by 64 to get the page number
+                let offset = cast[int](address and 0xFFFF) # offset in page
+                let pointer = page_table_r[page] # actual pointer
+                let src_word = cast[ptr uint32](pointer + offset)[]
                 case port:
                     of Port.Gpu: gp0(src_word)
                     else: quit("Unhandled DMA destination port" & ord(port).toHex(), QuitSuccess)
@@ -288,7 +287,10 @@ proc do_dma_block(channel: Channel, port_num: uint32) =
                     of Port.Gpu: 0x00'u32
                     of Port.CdRom: cdrom_dma_read_word()
                     else: quit("Unhandled DMA source port " & ord(port).toHex(), QuitSuccess)
-                ram_store32(cur_addr, src_word)
+                let page = cur_addr shr 16 # divide by 64 to get the page number
+                let offset = cast[int](cur_addr and 0xFFFF) # offset in page
+                let pointer = page_table_w[page] # actual pointer
+                cast[ptr uint32](pointer + offset)[] = src_word
         address = address + cast[uint32](increment)
         remsz -= 1
     channel_done(channel, port_num)
@@ -304,11 +306,17 @@ proc do_dma_linked_list(channel: Channel, port_num: uint32) =
 
     var run_dma = true
     while run_dma:
-        let header = ram_load32(address)
+        let page = address shr 16 # divide by 64 to get the page number
+        let offset = cast[int](address and 0xFFFF) # offset in page
+        let pointer = page_table_r[page] # actual pointer
+        let header = cast[ptr uint32](pointer + offset)[]
         var remsz = header shr 24
         while remsz > 0:
             address = (address + 4) and 0x1FFFFC'u32
-            let command = ram_load32(address)
+            let page = address shr 16 # divide by 64 to get the page number
+            let offset = cast[int](address and 0xFFFF) # offset in page
+            let pointer = page_table_r[page] # actual pointer
+            let command = cast[ptr uint32](pointer + offset)[]
             gp0(command)
             remsz -= 1
         if (header and 0x800000'u32) != 0:
@@ -367,7 +375,9 @@ proc set_dma_reg(offset: uint32, value: uint32) =
 
 # LOADS/STORES
 
-proc load32_io(address: uint32): uint32 =
+proc load32_io(offset: uint32): uint32 =
+    let index = offset shr 29
+    let address = offset and REGIONMASK[index]
     if address in 0x1F801000'u32 ..< 0x1F801024'u32: # MEMCONTROL
         return 0x00'u32
     elif address == 0x1F801060'u32:  # RAM_SIZE
@@ -386,9 +396,11 @@ proc load32_io(address: uint32): uint32 =
             of 0x1F801810: return gpu_read()
             of 0x1F801814: return gpu_status()
             else: return 0x00'u32
-    else: quit("Unhandled address32 " & address.toHex(), QuitSuccess)
+    else: quit("Unhandled load32io " & address.toHex(), QuitSuccess)
 
-proc load16_io(address: uint32): uint16 =
+proc load16_io(offset: uint32): uint16 =
+    let index = offset shr 29
+    let address = offset and REGIONMASK[index]
     if address in 0x1F801040'u32 ..< 0x1F801060'u32: # PADMEM
         return 0xFFFF'u16
     elif address in 0x1F801070'u32 ..< 0x1F801078'u32: # IRQCONTROL
@@ -400,21 +412,22 @@ proc load16_io(address: uint32): uint16 =
         return 0x00'u16
     elif address in 0x1F801C00'u32 ..< 0x1F801E80'u32: # SPU
         return 0x00'u16
-    else: quit("Unhandled address16 " & address.toHex(), QuitSuccess)
+    else: quit("Unhandled load16io " & address.toHex(), QuitSuccess)
 
-proc load8_io(address: uint32): uint8 =
-
+proc load8_io(offset: uint32): uint8 =
+    let index = offset shr 29
+    let address = offset and REGIONMASK[index]
     if address in 0x1F000000'u32 ..< 0x1F080000'u32: # Expansion
         return 0xFF'u8
     elif address in 0x1F801040'u32 ..< 0x1F801060'u32: # PADMEM
         return 0xFF'u8
     elif address in 0x1F801800'u32 ..< 0x1F801804'u32: # CDROM
         return cdrom_load8(address - 0x1F801800'u32)
-    else: quit("Unhandled address8 " & address.toHex(), QuitSuccess)
+    else: quit("Unhandled load8io " & address.toHex(), QuitSuccess)
 
 proc load32*(address: uint32): uint32 =
     let page = address shr 16 # divide by 64 to get the page number
-    let offset = int(address and 0xFFFF) # offset in page
+    let offset = cast[int](address and 0xFFFF) # offset in page
     let pointer = page_table_r[page] # actual pointer
 
     if pointer != nil:
@@ -429,6 +442,8 @@ proc load32*(address: uint32): uint32 =
                 return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
             else:
                 return load32_io(address)
+        else:
+            quit("Unhandled load32 " & address.toHex(), QuitSuccess)
 
 proc load16*(address: uint32): uint16 =
     let page = address shr 16 # divide by 64 to get the page number
@@ -445,22 +460,28 @@ proc load16*(address: uint32): uint16 =
                 return b0 or (b1 shl 8)
             else:
                 return load16_io(address)
+        else:
+            quit("Unhandled load16 " & address.toHex(), QuitSuccess)
 
 proc load8*(address: uint32): uint8 =
     let page = address shr 16 # divide by 64 to get the page number
-    let offset = int(address and 0xFFFF) # offset in page
+    let offset = cast[int](address and 0xFFFF) # offset in page
     let pointer = page_table_r[page] # actual pointer
 
     if pointer != nil:
         return (pointer + offset)[]
     else:
-        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80):
-            if (offset < 0x400) and (page != 0xBF80):
+        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80) or (page == 0x1F00):
+            if (offset < 0x400) and (page != 0xBF80) and (page != 0x1F00):
                 return scratchpad[offset]
             else:
                 return load8_io(address)
+        else:
+            quit("Unhandled load8 " & address.toHex(), QuitSuccess)
 
-proc store32_io(address: uint32, value: uint32) =
+proc store32_io(offset: uint32, value: uint32) =
+    let index = offset shr 29
+    let address = offset and REGIONMASK[index]
     if address in 0x1F801000'u32 ..< 0x1F801024'u32:
         case address:
             of 0x1F801000:
@@ -486,7 +507,9 @@ proc store32_io(address: uint32, value: uint32) =
     elif address in 0xFFFE0130'u32 ..< 0xFFFE0134'u32: discard # CACHECONTROL
     else: quit("Unhandled store32io " & address.toHex(), QuitSuccess)
 
-proc store16_io(address: uint32, value: uint16) =
+proc store16_io(offset: uint32, value: uint16) =
+    let index = offset shr 29
+    let address = offset and REGIONMASK[index]
     if address in 0x1F801040'u32 ..< 0x1F801060'u32: discard # PADMEM
     elif address in 0x1F801070'u32 ..< 0x1F801078'u32: # IRQCONTROL
         case address:
@@ -499,37 +522,40 @@ proc store16_io(address: uint32, value: uint16) =
     else: quit("Unhandled store16io " & address.toHex(), QuitSuccess)
 
 
-proc store8_io(address: uint32, value: uint8) =
+proc store8_io(offset: uint32, value: uint8) =
+    let index = offset shr 29
+    let address = offset and REGIONMASK[index]
     if address == 0x1F801040'u32: discard # JOYDATA
     elif address in 0x1F801800'u32 ..< 0x1F801804'u32: # CDROM
         cdrom_store8(address - 0x1F801800'u32, value)
     elif address in 0x1F802000'u32 ..< 0x1F802042'u32: discard # Expansion 2
     elif address == 0x1F802080'u32: # PCSX register
         stdout.write char(value)
-        return
     else: quit("Unhandled store8io " & address.toHex(), QuitSuccess)
 
 proc store32*(address: uint32, value: uint32) =
     let page = address shr 16 # divide by 64 to get the page number
     let offset = int(address and 0xFFFF) # offset in page
-    let pointer = page_table_r[page] # actual pointer
+    let pointer = page_table_w[page] # actual pointer
 
     if pointer != nil:
         cast[ptr uint32](pointer + offset)[] = value
     else:
-        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80):
-            if (offset < 0x400) and (page != 0xBF80):
+        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80) or (page == 0xFFFE):
+            if (offset < 0x400) and (page != 0xBF80) and (page != 0xFFFE):
                 scratchpad[offset + 0] = cast[uint8](value)
                 scratchpad[offset + 1] = cast[uint8](value shr 8)
                 scratchpad[offset + 2] = cast[uint8](value shr 16)
                 scratchpad[offset + 3] = cast[uint8](value shr 24)
             else:
                 store32_io(address, value)
+        else:
+            quit("Unhandled store32 " & address.toHex(), QuitSuccess)
 
 proc store16*(address: uint32, value: uint16) =
     let page = address shr 16 # divide by 64 to get the page number
     let offset = int(address and 0xFFFF) # offset in page
-    let pointer = page_table_r[page] # actual pointer
+    let pointer = page_table_w[page] # actual pointer
 
     if pointer != nil:
         cast[ptr uint16](pointer + offset)[] = value
@@ -540,11 +566,13 @@ proc store16*(address: uint32, value: uint16) =
                 scratchpad[offset + 1] = cast[uint8](value shr 8)
             else:
                 store16_io(address, value)
+        else:
+            quit("Unhandled store16 " & address.toHex(), QuitSuccess)
 
 proc store8*(address: uint32, value: uint8) =
     let page = address shr 16 # divide by 64 to get the page number
     let offset = int(address and 0xFFFF) # offset in page
-    let pointer = page_table_r[page] # actual pointer
+    let pointer = page_table_w[page] # actual pointer
 
     if pointer != nil:
         (pointer + offset)[] = value
@@ -554,3 +582,5 @@ proc store8*(address: uint32, value: uint8) =
                 scratchpad[offset + 0] = cast[uint8](value)
             else:
                 store8_io(address, value)
+        else:
+            quit("Unhandled store8 " & address.toHex(), QuitSuccess)

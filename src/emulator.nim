@@ -1,14 +1,18 @@
-import cpu, renderer, gpu, cdrom
+import cpu, renderer, gpu, cdrom, gte
 
 var sideload = false
-var sideloadfile = "./exes/psxtest_cpu.exe"
+var sideloadfile = "./exes/PSXNICCC.exe"
+
+var gte_tests = false
+if gte_tests:
+    gte_ops_test()
 
 rungame = true
 # Games that atleast show something:
-# Puzzle Bobble 2 - stuck on now loading
+# Puzzle Bobble 2 - stuck on "Now loading"
 # Raiden Project - gets to menu waiting for select
-gamefile_name = "games/pb2/Puzzle Bobble 2 (Japan) (Track 01).bin"
-gamefile_region = 'I'
+gamefile_name = "games/rp/Raiden Project.bin"
+gamefile_region = 'A'
 if rungame:
     read_game()
 

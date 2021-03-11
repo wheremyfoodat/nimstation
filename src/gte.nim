@@ -367,6 +367,23 @@ proc do_ncd(vector_index: uint8) =
     multiply_matrix_by_vector(Matrix.Color, 3, ControlVector.BackgroundColor)
     cmd_dcpl()
 
+proc do_ncc(vector_index: uint8) =
+    multiply_matrix_by_vector(Matrix.Light, vector_index, ControlVector.Zero)
+    v[3][0] = ir[1]
+    v[3][1] = ir[2]
+    v[3][2] = ir[3]
+    multiply_matrix_by_vector(Matrix.Color, 3, ControlVector.BackgroundColor)
+    let (r, g, b, _) = rgb
+    let col_arr = [r, g, b]
+
+    for i in 0 ..< 3:
+        let col = cast[int32](col_arr[i]) shl 4
+        let temp_ir = cast[int32](ir[i + 1])
+        mac[i + 1] = (col * temp_ir) shr config_shift
+
+    mac_to_ir()
+    mac_to_rgb_fifo()
+
 proc cmd_nclip() =
     var (x0, y0) = (cast[int32](xy_fifo[0][0]), cast[int32](xy_fifo[0][1]))
     var (x1, y1) = (cast[int32](xy_fifo[1][0]), cast[int32](xy_fifo[1][1]))
@@ -411,6 +428,33 @@ proc cmd_avsz3() =
     mac[0] = cast[int32](average)
     otz = i64_to_otz(average)
 
+proc cmd_avsz4() =
+    let z0 = cast[uint32](z_fifo[0])
+    let z1 = cast[uint32](z_fifo[1])
+    let z2 = cast[uint32](z_fifo[2])
+    let z3 = cast[uint32](z_fifo[3])
+
+    let sum = z0 + z1 + z2 + z3
+
+    let temp_zsf4 = cast[int64](zsf4)
+    let average = temp_zsf4 * cast[int64](sum)
+
+    check_mac_overflow(average)
+    mac[0] = cast[int32](average)
+    otz = i64_to_otz(average)
+
+proc cmd_ncct() =
+    do_ncc(0)
+    do_ncc(1)
+    do_ncc(2)
+
+proc cmd_rtps() =
+    let projection_factor = do_rtp(0)
+    depth_queuing(projection_factor)
+
+proc cmd_nccs() =
+    do_ncc(0)
+
 
 proc gte_command*(command: uint32) =
     let opcode = command and 0x3F
@@ -418,11 +462,15 @@ proc gte_command*(command: uint32) =
     flags = 0
 
     case opcode:
+        of 0x01: cmd_rtps()     #Tested
         of 0x06: cmd_nclip()    #Tested
-        #of 0x12: cmd_mvmva()
+        of 0x12: cmd_mvmva()    #Tested
         of 0x13: cmd_ncds()     #Tested
+        of 0x1B: cmd_nccs()     #No tests
         of 0x2D: cmd_avsz3()    #Tested
+        of 0x2E: cmd_avsz4()    #No tests
         of 0x30: cmd_rtpt()     #Tested
+        of 0x3F: cmd_ncct()
         else: quit("Unhandled GTE opcode " & opcode.toHex(), QuitSuccess)
 
     let msb = flags and 0x7F87E000
@@ -801,7 +849,9 @@ proc validate_result(test: Test) =
         echo "Got ", errors, " errors :("
         quit("", QuitSuccess)
 
-proc gte_ops_test() =
+proc gte_ops_test*() =
+    echo ""
+    echo "Running GTE tests"
     for test in TESTS:
         echo "Test: ", test.desc
         echo "Command: 0x", test.command.toHex()
@@ -811,31 +861,32 @@ proc gte_ops_test() =
 
     reset_gte(TESTS[0], false)
 
-gte_ops_test()
+    assert divide(0, 1) == 0
+    assert divide(0, 1234) == 0
+    assert divide(1, 1) == 0x10000
+    assert divide(2, 2) == 0x10000
+    assert divide(0xFFFF, 0xFFFF) == 0xFFFF
+    assert divide(0xFFFF, 0xFFFE) == 0x10000
+    assert divide(1, 2) == 0x8000
+    assert divide(1, 3) == 0x5555
+    assert divide(5, 6) == 0xd555
 
-# DIVISION TEST
+    assert divide(1, 4) == 0x4000
+    assert divide(10, 40) == 0x4000
+    assert divide(0xF00, 0xbeef) == 0x141d
+    assert divide(9876, 8765) == 0x12072
+    assert divide(200, 10000) == 0x51f
+    assert divide(0xFFFF, 0x8000) == 0x1FFFE
+    assert divide(0xE5D7, 0x72EC) == 0x1FFFF
 
-assert divide(0, 1) == 0
-assert divide(0, 1234) == 0
-assert divide(1, 1) == 0x10000
-assert divide(2, 2) == 0x10000
-assert divide(0xFFFF, 0xFFFF) == 0xFFFF
-assert divide(0xFFFF, 0xFFFE) == 0x10000
-assert divide(1, 2) == 0x8000
-assert divide(1, 3) == 0x5555
-assert divide(5, 6) == 0xd555
+    for i in 0 ..< 0x100'u32:
+        let v = (0x40000 div (i + 0x100) + 1) div 2 - 0x101
+        assert cast[uint32](UNR_TABLE[i]) == v
+    assert UNR_TABLE[0xFF] == UNR_TABLE[0x100]
 
-assert divide(1, 4) == 0x4000
-assert divide(10, 40) == 0x4000
-assert divide(0xF00, 0xbeef) == 0x141d
-assert divide(9876, 8765) == 0x12072
-assert divide(200, 10000) == 0x51f
-assert divide(0xFFFF, 0x8000) == 0x1FFFE
-assert divide(0xE5D7, 0x72EC) == 0x1FFFF
+    echo "All tests passed!"
 
-for i in 0 ..< 0x100'u32:
-    let v = (0x40000 div (i + 0x100) + 1) div 2 - 0x101
-    assert cast[uint32](UNR_TABLE[i]) == v
-assert UNR_TABLE[0xFF] == UNR_TABLE[0x100]
+
+
 
 #

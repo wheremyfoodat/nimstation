@@ -693,7 +693,7 @@ proc op_swc3() =
     exception(Exception.CoprocessorError)
 
 proc op_illegal() =
-    echo "Illegal instruction ", current_instruction.toHex()
+    echo "Illegal instruction ", current_instruction.toHex(), " ", cast[int](function).toBin(8)
     delayed_load()
     exception(Exception.IllegalInstruction)
 
@@ -821,6 +821,8 @@ proc run_next_instruction*() =
         return
 
     current_instruction = load32(pc)
+    if current_instruction == 0xBFC06FDC'u32:
+        echo pc.toHex()
 
     if cdrom_debug:
         echo pc.toHex(), " ", current_instruction.toHex()
@@ -839,7 +841,7 @@ proc run_next_instruction*() =
     branch_bool = false
 
     cycle_count += 1
-    if (cycle_count mod 8) == 0:
+    if (cycle_count and 7) == 0:
         #discard
         tick_timers()
 

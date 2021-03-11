@@ -1,6 +1,9 @@
 import strutils, csfml
 import renderer, counters, interrupt
 
+# TODO: software renderer, this implementation right now has like a lot of flaws
+
+
 const VRAM_SIZE_PIXELS = 1024 * 512
 type
     TextureDepth = enum
@@ -194,6 +197,9 @@ proc tick_gpu*() =
     if vblank_interrupt and (not vblank_int):
         frame_counter += 1
         parse_events()
+        if not display_disabled:
+            render_frame()
+
 
     vblank_interrupt = vblank_int
 
@@ -255,7 +261,7 @@ proc gp0_draw_mode() =
             else:
                 echo "Unhandled texture depth"
                 TextureDepth.T16Bit
-        dithering = ((gp0_instruction shr 0) and 1) != 0
+        dithering = ((gp0_instruction shr 9) and 1) != 0
         draw_to_display = ((gp0_instruction shr 10) and 1) != 0
         texture_disable = ((gp0_instruction shr 11) and 1) != 0
         rectangle_texture_x_flip = ((gp0_instruction shr 12) and 1) != 0
@@ -358,8 +364,6 @@ proc gp0_drawing_offset() =
     drawing_x_offset = cast[int16](x shl 5) shr 5
     drawing_y_offset = cast[int16](y shl 5) shr 5
 
-    #frame_counter += 1
-    #render_frame()
 
 proc gp0_texture_window() =
     texture_window_x_mask = uint8(gp0_instruction and 0x1F)
@@ -374,7 +378,8 @@ proc gp0_mask_bit_setting() =
 proc gp1_display_vram_start() =
     display_vram_x_start = uint16(gp1_instruction and 0x3FE'u16)
     display_vram_y_start = uint16((gp1_instruction shr 10) and 0x1FF'u16)
-    render_frame()
+    # if not display_disabled:
+    #     render_frame()
 
 proc gp1_display_horizontal_range() =
     display_horiz_start = uint16(gp1_instruction and 0xFFF'u16)
@@ -710,6 +715,49 @@ proc gp0_textured_shaded_quad() =
         ]
         push_texture(positions, tex_top_left[0], tex_top_left[1], 255)
 
+proc gp0_textured_triangle() =
+    {.gcsafe.}:
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2])
+        set_clut(gp0_command.buffer[2] shr 16)
+        set_draw_params(gp0_command.buffer[4] shr 16)
+
+        let positions = [
+            position_from_gp0(gp0_command.buffer[1]),
+            position_from_gp0(gp0_command.buffer[3]),
+            position_from_gp0(gp0_command.buffer[5])
+            ]
+
+        let vertices = [
+            vertex(vec2(cfloat(positions[0][0]), cfloat(positions[0][1])), colors),
+            vertex(vec2(cfloat(positions[1][0]), cfloat(positions[1][1])), colors),
+            vertex(vec2(cfloat(positions[2][0]), cfloat(positions[2][1])), colors),
+        ]
+
+        push_triangle(vertices)
+
+proc gp0_textured_shaded_triangle() =
+    {.gcsafe.}:
+        let temp_col = color_from_gp0(gp0_command.buffer[0])
+        let colors = color(temp_col[0], temp_col[1], temp_col[2])
+        set_clut(gp0_command.buffer[2] shr 16)
+        set_draw_params(gp0_command.buffer[5] shr 16)
+
+        let positions = [
+            position_from_gp0(gp0_command.buffer[1]),
+            position_from_gp0(gp0_command.buffer[4]),
+            position_from_gp0(gp0_command.buffer[7])
+            ]
+
+        let vertices = [
+            vertex(vec2(cfloat(positions[0][0]), cfloat(positions[0][1])), colors),
+            vertex(vec2(cfloat(positions[1][0]), cfloat(positions[1][1])), colors),
+            vertex(vec2(cfloat(positions[2][0]), cfloat(positions[2][1])), colors),
+        ]
+
+        push_triangle(vertices)
+
+
 proc gp0_textured_rect() =
     {.gcsafe.}:
         let size = position_from_gp0(gp0_command.buffer[3])
@@ -754,9 +802,18 @@ proc gp0*(value: uint32) =
             of 0x04 .. 0x1E: (1'u32, gp0_nop)
             of 0x20: (4'u32, gp0_monochrome_triangle)
             of 0x22: (4'u32, gp0_monochrome_triangle)
+            of 0x24: (7'u32, gp0_textured_triangle) # TODO: ADD TEXTURES
+            of 0x25: (7'u32, gp0_textured_triangle)
+            of 0x26: (7'u32, gp0_textured_triangle)
+            of 0x27: (7'u32, gp0_textured_triangle)
             of 0x28: (5'u32, gp0_quad_mono_opaque)
             of 0x2C: (9'u32, gp0_quad_texture_blend_opaque)
+            of 0x2D: (9'u32, gp0_quad_texture_blend_opaque)
+            of 0x2E: (9'u32, gp0_quad_texture_blend_opaque)
+            of 0x2F: (9'u32, gp0_quad_texture_blend_opaque)
             of 0x30: (6'u32, gp0_triangle_shaded_opaque)
+            of 0x34: (9'u32, gp0_textured_shaded_triangle)
+            of 0x36: (9'u32, gp0_textured_shaded_triangle)
             of 0x38: (8'u32, gp0_quad_shaded_opaque)
             of 0x3C: (12'u32, gp0_textured_shaded_quad)
             of 0x60: (3'u32, gp0_mono_rect_var_opaque)
