@@ -680,7 +680,7 @@ proc gte_data*(reg: uint32): uint32 =
         of 10: return cast[uint32](ir[2])
         of 11: return cast[uint32](ir[3])
         of 12: return xy_to_u32(xy_fifo[0])
-        of 13: xy_to_u32(xy_fifo[1])
+        of 13: return xy_to_u32(xy_fifo[1])
         of 14: return xy_to_u32(xy_fifo[2])
         of 15: return xy_to_u32(xy_fifo[3])
         of 16: return cast[uint32](z_fifo[0])
