@@ -127,14 +127,14 @@ proc render_frame*() =
         #window.clear Black
         window.draw(vram_sprite)
 
-    if nvertices > 0:
+    if nvertices > 0'u32:
         window.draw(vertex_array)
 
-    if ntextures > 0:
+    if ntextures > 0'u32:
         for sprite in temp_sprites:
             window.draw(sprite)
 
-    if (nvertices != 0) or (ntextures != 0):
+    if (nvertices != 0'u32) or (ntextures != 0'u32):
         window.display()
         vertex_array.clear()
         temp_textures.setLen(0)
