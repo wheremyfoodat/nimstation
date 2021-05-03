@@ -123,7 +123,7 @@ proc parse_events*() =
             else: discard
 
 proc render_frame*() =
-    if (nvertices > 0) or (ntextures > 0):
+    if (nvertices > 0'u32) or (ntextures > 0'u32):
         #window.clear Black
         window.draw(vram_sprite)
 
