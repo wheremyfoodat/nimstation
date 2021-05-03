@@ -113,9 +113,9 @@ proc set_flag(bit: uint8) =
 
 proc i64_to_i44(flag: uint8, value: int64): int64 =
     if value > 0x7FFFFFFFFFF:
-        set_flag(30 - flag)
+        set_flag(30'u8 - flag)
     elif value < (-0x80000000000):
-        set_flag(27 - flag)
+        set_flag(27'u8 - flag)
 
     return (value shl (64 - 44)) shr (64 - 44)
 
@@ -127,10 +127,10 @@ proc i32_to_i16_saturate(flag: uint8, value: int32): int16 =
     let max = cast[int32](int16(32767))
 
     if value > max:
-        set_flag(24 - flag)
+        set_flag(24'u8 - flag)
         return cast[int16](max)
     elif value < min:
-        set_flag(24 - flag)
+        set_flag(24'u8 - flag)
         return cast[int16](min)
     else:
         return cast[int16](value)
@@ -170,10 +170,10 @@ proc divide(numerator: uint16, divisor: uint16): uint32 =
 
 proc i32_to_i11_saturate(flag: uint8, value: int32): int16 =
     if value < (-0x400):
-        set_flag(14 - flag)
+        set_flag(14'u8 - flag)
         return -0x400
     elif value > 0x3FF:
-        set_flag(14 - flag)
+        set_flag(14'u8 - flag)
         return 0x3FF
     else:
         return cast[int16](value)
