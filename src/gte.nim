@@ -880,9 +880,9 @@ proc gte_ops_test*() =
     assert divide(0xE5D7, 0x72EC) == 0x1FFFF'u32
 
     for i in 0 ..< 0x100'u32:
-        let v = (0x40000 div (i + 0x100) + 1) div 2 - 0x101
+        let v = (0x40000'u32 div (i + 0x100'u32) + 1) div 2'u32 - 0x101'u32
         assert cast[uint32](UNR_TABLE[i]) == v
-    assert UNR_TABLE[0xFF] == UNR_TABLE[0x100]
+    assert UNR_TABLE[0xFF'u32] == UNR_TABLE[0x100'u32]
 
     echo "All tests passed!"
 
