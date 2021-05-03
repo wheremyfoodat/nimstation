@@ -1,7 +1,7 @@
 import csfml, times
 import cdrom, bus
 
-const VERTEX_BUFFER_LEN = 64*1024'u32
+const VERTEX_BUFFER_LEN = 64'u32 *1024'u32
 const VRAM_SIZE_PIXELS = 1024 * 512
 
 var screenWidth: cint = 1024
