@@ -845,7 +845,7 @@ proc validate_result(test: Test) =
             echo "Data register ", reg, " expected 0x", val.toHex(), " got 0x", v.toHex()
             errors += 1
 
-    if errors > 0:
+    if errors > 0'u32:
         echo "Got ", errors, " errors :("
         quit("", QuitSuccess)
 
@@ -861,23 +861,23 @@ proc gte_ops_test*() =
 
     reset_gte(TESTS[0], false)
 
-    assert divide(0, 1) == 0
-    assert divide(0, 1234) == 0
-    assert divide(1, 1) == 0x10000
-    assert divide(2, 2) == 0x10000
-    assert divide(0xFFFF, 0xFFFF) == 0xFFFF
-    assert divide(0xFFFF, 0xFFFE) == 0x10000
-    assert divide(1, 2) == 0x8000
-    assert divide(1, 3) == 0x5555
-    assert divide(5, 6) == 0xd555
+    assert divide(0, 1) == 0'u32
+    assert divide(0, 1234) == 0'u32
+    assert divide(1, 1) == 0x10000'u32
+    assert divide(2, 2) == 0x10000'u32
+    assert divide(0xFFFF, 0xFFFF) == 0xFFFF'u32
+    assert divide(0xFFFF, 0xFFFE) == 0x10000'u32
+    assert divide(1, 2) == 0x8000'u32
+    assert divide(1, 3) == 0x5555'u32
+    assert divide(5, 6) == 0xd555'u32
 
-    assert divide(1, 4) == 0x4000
-    assert divide(10, 40) == 0x4000
-    assert divide(0xF00, 0xbeef) == 0x141d
-    assert divide(9876, 8765) == 0x12072
-    assert divide(200, 10000) == 0x51f
-    assert divide(0xFFFF, 0x8000) == 0x1FFFE
-    assert divide(0xE5D7, 0x72EC) == 0x1FFFF
+    assert divide(1, 4) == 0x4000'u32
+    assert divide(10, 40) == 0x4000'u32
+    assert divide(0xF00, 0xbeef) == 0x141d'u32
+    assert divide(9876, 8765) == 0x12072'u32
+    assert divide(200, 10000) == 0x51f'u32
+    assert divide(0xFFFF, 0x8000) == 0x1FFFE'u32
+    assert divide(0xE5D7, 0x72EC) == 0x1FFFF'u32
 
     for i in 0 ..< 0x100'u32:
         let v = (0x40000 div (i + 0x100) + 1) div 2 - 0x101
