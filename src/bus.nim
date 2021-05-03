@@ -434,7 +434,7 @@ proc load32*(address: uint32): uint32 =
         return cast[ptr uint32](pointer + offset)[]
     else:
         if (page == 0x1F80'u32) or (page == 0x9F80'u32) or (page == 0xBF80'u32):
-            if (offset < 0x400'u32) and (page != 0xBF80'u32):
+            if (offset < 0x400'i32) and (page != 0xBF80'u32):
                 let b0 = cast[uint32](scratchpad[offset + 0])
                 let b1 = cast[uint32](scratchpad[offset + 1])
                 let b2 = cast[uint32](scratchpad[offset + 2])
@@ -454,7 +454,7 @@ proc load16*(address: uint32): uint16 =
         return cast[ptr uint16](pointer + offset)[]
     else:
         if (page == 0x1F80'u32) or (page == 0x9F80'u32) or (page == 0xBF80'u32):
-            if (offset < 0x400'u32) and (page != 0xBF80'u32):
+            if (offset < 0x400'i32) and (page != 0xBF80'u32):
                 let b0 = cast[uint16](scratchpad[offset + 0])
                 let b1 = cast[uint16](scratchpad[offset + 1])
                 return b0 or (b1 shl 8)
@@ -472,7 +472,7 @@ proc load8*(address: uint32): uint8 =
         return (pointer + offset)[]
     else:
         if (page == 0x1F80'u32) or (page == 0x9F80'u32) or (page == 0xBF80'u32) or (page == 0x1F00'u32):
-            if (offset < 0x400'u32) and (page != 0xBF80'u32) and (page != 0x1F00'u32):
+            if (offset < 0x400'i32) and (page != 0xBF80'u32) and (page != 0x1F00'u32):
                 return scratchpad[offset]
             else:
                 return load8_io(address)
