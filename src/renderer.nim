@@ -1,7 +1,7 @@
 import csfml, times
 import cdrom, bus
 
-const VERTEX_BUFFER_LEN = 64'u32 *1024'u32
+const VERTEX_BUFFER_LEN = 64 * 1024
 const VRAM_SIZE_PIXELS = 1024 * 512
 
 var screenWidth: cint = 1024
@@ -153,7 +153,7 @@ proc render_frame*() =
 
 proc push_triangle*(vertices: array[3, Vertex]) =
     #discard
-    if (nvertices + 3) > VERTEX_BUFFER_LEN:
+    if (nvertices + 3) > VERTEX_BUFFER_LEN'u32:
         render_frame()
 
     for i in 0 ..< 3:
@@ -162,7 +162,7 @@ proc push_triangle*(vertices: array[3, Vertex]) =
 
 proc push_quad*(vertices: array[4, Vertex]) =
     #discard
-    if (nvertices + 6) > VERTEX_BUFFER_LEN:
+    if (nvertices + 6) > VERTEX_BUFFER_LEN'u32:
         render_frame()
 
     for i in 0 ..< 3:
