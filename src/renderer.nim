@@ -153,7 +153,7 @@ proc render_frame*() =
 
 proc push_triangle*(vertices: array[3, Vertex]) =
     #discard
-    if (nvertices + 3) > VERTEX_BUFFER_LEN'u32:
+    if (nvertices + 3) > 65536'u32:
         render_frame()
 
     for i in 0 ..< 3:
@@ -162,7 +162,7 @@ proc push_triangle*(vertices: array[3, Vertex]) =
 
 proc push_quad*(vertices: array[4, Vertex]) =
     #discard
-    if (nvertices + 6) > VERTEX_BUFFER_LEN'u32:
+    if (nvertices + 6) > 65536'u32:
         render_frame()
 
     for i in 0 ..< 3:
