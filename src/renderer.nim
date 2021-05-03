@@ -1,7 +1,7 @@
 import csfml, times
 import cdrom, bus
 
-const VERTEX_BUFFER_LEN = 64*1024
+const VERTEX_BUFFER_LEN = 64 * 1024
 const VRAM_SIZE_PIXELS = 1024 * 512
 
 var screenWidth: cint = 1024
@@ -123,18 +123,18 @@ proc parse_events*() =
             else: discard
 
 proc render_frame*() =
-    if (nvertices > 0) or (ntextures > 0):
+    if (nvertices > 0'u32) or (ntextures > 0'u32):
         #window.clear Black
         window.draw(vram_sprite)
 
-    if nvertices > 0:
+    if nvertices > 0'u32:
         window.draw(vertex_array)
 
-    if ntextures > 0:
+    if ntextures > 0'u32:
         for sprite in temp_sprites:
             window.draw(sprite)
 
-    if (nvertices != 0) or (ntextures != 0):
+    if (nvertices != 0'u32) or (ntextures != 0'u32):
         window.display()
         vertex_array.clear()
         temp_textures.setLen(0)
@@ -153,7 +153,7 @@ proc render_frame*() =
 
 proc push_triangle*(vertices: array[3, Vertex]) =
     #discard
-    if (nvertices + 3) > VERTEX_BUFFER_LEN:
+    if (nvertices + 3) > 65536'u32:
         render_frame()
 
     for i in 0 ..< 3:
@@ -162,7 +162,7 @@ proc push_triangle*(vertices: array[3, Vertex]) =
 
 proc push_quad*(vertices: array[4, Vertex]) =
     #discard
-    if (nvertices + 6) > VERTEX_BUFFER_LEN:
+    if (nvertices + 6) > 65536'u32:
         render_frame()
 
     for i in 0 ..< 3:

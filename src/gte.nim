@@ -113,9 +113,9 @@ proc set_flag(bit: uint8) =
 
 proc i64_to_i44(flag: uint8, value: int64): int64 =
     if value > 0x7FFFFFFFFFF:
-        set_flag(30 - flag)
+        set_flag(30'u8 - flag)
     elif value < (-0x80000000000):
-        set_flag(27 - flag)
+        set_flag(27'u8 - flag)
 
     return (value shl (64 - 44)) shr (64 - 44)
 
@@ -127,10 +127,10 @@ proc i32_to_i16_saturate(flag: uint8, value: int32): int16 =
     let max = cast[int32](int16(32767))
 
     if value > max:
-        set_flag(24 - flag)
+        set_flag(24'u8 - flag)
         return cast[int16](max)
     elif value < min:
-        set_flag(24 - flag)
+        set_flag(24'u8 - flag)
         return cast[int16](min)
     else:
         return cast[int16](value)
@@ -170,10 +170,10 @@ proc divide(numerator: uint16, divisor: uint16): uint32 =
 
 proc i32_to_i11_saturate(flag: uint8, value: int32): int16 =
     if value < (-0x400):
-        set_flag(14 - flag)
+        set_flag(14'u8 - flag)
         return -0x400
     elif value > 0x3FF:
-        set_flag(14 - flag)
+        set_flag(14'u8 - flag)
         return 0x3FF
     else:
         return cast[int16](value)
@@ -320,10 +320,10 @@ proc i64_to_otz(average: int64): uint16 =
 proc mac_to_color(mac: int32, which: uint8): uint8 =
     let c = mac shr 4
     if c < 0:
-        set_flag(21 - which)
+        set_flag(21'u8 - which)
         return 0'u8
     elif c > 0xFF:
-        set_flag(21 - which)
+        set_flag(21'u8 - which)
         return 0xFF'u8
     else:
         return cast[uint8](c)
@@ -845,7 +845,7 @@ proc validate_result(test: Test) =
             echo "Data register ", reg, " expected 0x", val.toHex(), " got 0x", v.toHex()
             errors += 1
 
-    if errors > 0:
+    if errors > 0'u32:
         echo "Got ", errors, " errors :("
         quit("", QuitSuccess)
 
@@ -861,28 +861,28 @@ proc gte_ops_test*() =
 
     reset_gte(TESTS[0], false)
 
-    assert divide(0, 1) == 0
-    assert divide(0, 1234) == 0
-    assert divide(1, 1) == 0x10000
-    assert divide(2, 2) == 0x10000
-    assert divide(0xFFFF, 0xFFFF) == 0xFFFF
-    assert divide(0xFFFF, 0xFFFE) == 0x10000
-    assert divide(1, 2) == 0x8000
-    assert divide(1, 3) == 0x5555
-    assert divide(5, 6) == 0xd555
+    assert divide(0, 1) == 0'u32
+    assert divide(0, 1234) == 0'u32
+    assert divide(1, 1) == 0x10000'u32
+    assert divide(2, 2) == 0x10000'u32
+    assert divide(0xFFFF, 0xFFFF) == 0xFFFF'u32
+    assert divide(0xFFFF, 0xFFFE) == 0x10000'u32
+    assert divide(1, 2) == 0x8000'u32
+    assert divide(1, 3) == 0x5555'u32
+    assert divide(5, 6) == 0xd555'u32
 
-    assert divide(1, 4) == 0x4000
-    assert divide(10, 40) == 0x4000
-    assert divide(0xF00, 0xbeef) == 0x141d
-    assert divide(9876, 8765) == 0x12072
-    assert divide(200, 10000) == 0x51f
-    assert divide(0xFFFF, 0x8000) == 0x1FFFE
-    assert divide(0xE5D7, 0x72EC) == 0x1FFFF
+    assert divide(1, 4) == 0x4000'u32
+    assert divide(10, 40) == 0x4000'u32
+    assert divide(0xF00, 0xbeef) == 0x141d'u32
+    assert divide(9876, 8765) == 0x12072'u32
+    assert divide(200, 10000) == 0x51f'u32
+    assert divide(0xFFFF, 0x8000) == 0x1FFFE'u32
+    assert divide(0xE5D7, 0x72EC) == 0x1FFFF'u32
 
     for i in 0 ..< 0x100'u32:
-        let v = (0x40000 div (i + 0x100) + 1) div 2 - 0x101
+        let v = (0x40000'u32 div (i + 0x100'u32) + 1) div 2'u32 - 0x101'u32
         assert cast[uint32](UNR_TABLE[i]) == v
-    assert UNR_TABLE[0xFF] == UNR_TABLE[0x100]
+    assert UNR_TABLE[0xFF'u32] == UNR_TABLE[0x100'u32]
 
     echo "All tests passed!"
 

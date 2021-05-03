@@ -266,7 +266,7 @@ proc do_dma_block(channel: Channel, port_num: uint32) =
 
     var address = channel.base
     var remsz = transfer_size(channel)
-    while remsz > 0:
+    while remsz > 0'u32:
         let cur_addr = address and 0x1FFFFC'u32
         case channel.direction:
             of Direction.FromRam:
@@ -311,7 +311,7 @@ proc do_dma_linked_list(channel: Channel, port_num: uint32) =
         let pointer = page_table_r[page] # actual pointer
         let header = cast[ptr uint32](pointer + offset)[]
         var remsz = header shr 24
-        while remsz > 0:
+        while remsz > 0'u32:
             address = (address + 4) and 0x1FFFFC'u32
             let page = address shr 16 # divide by 64 to get the page number
             let offset = cast[int](address and 0xFFFF) # offset in page
@@ -433,8 +433,8 @@ proc load32*(address: uint32): uint32 =
     if pointer != nil:
         return cast[ptr uint32](pointer + offset)[]
     else:
-        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80):
-            if (offset < 0x400) and (page != 0xBF80):
+        if (page == 0x1F80'u32) or (page == 0x9F80'u32) or (page == 0xBF80'u32):
+            if (offset < 0x400'i32) and (page != 0xBF80'u32):
                 let b0 = cast[uint32](scratchpad[offset + 0])
                 let b1 = cast[uint32](scratchpad[offset + 1])
                 let b2 = cast[uint32](scratchpad[offset + 2])
@@ -453,8 +453,8 @@ proc load16*(address: uint32): uint16 =
     if pointer != nil:
         return cast[ptr uint16](pointer + offset)[]
     else:
-        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80):
-            if (offset < 0x400) and (page != 0xBF80):
+        if (page == 0x1F80'u32) or (page == 0x9F80'u32) or (page == 0xBF80'u32):
+            if (offset < 0x400'i32) and (page != 0xBF80'u32):
                 let b0 = cast[uint16](scratchpad[offset + 0])
                 let b1 = cast[uint16](scratchpad[offset + 1])
                 return b0 or (b1 shl 8)
@@ -471,8 +471,8 @@ proc load8*(address: uint32): uint8 =
     if pointer != nil:
         return (pointer + offset)[]
     else:
-        if (page == 0x1F80) or (page == 0x9F80) or (page == 0xBF80) or (page == 0x1F00):
-            if (offset < 0x400) and (page != 0xBF80) and (page != 0x1F00):
+        if (page == 0x1F80'u32) or (page == 0x9F80'u32) or (page == 0xBF80'u32) or (page == 0x1F00'u32):
+            if (offset < 0x400'i32) and (page != 0xBF80'u32) and (page != 0x1F00'u32):
                 return scratchpad[offset]
             else:
                 return load8_io(address)

@@ -180,7 +180,7 @@ proc tick_gpu*() =
         display_line += 1
         cycles = 0
 
-        if display_line == lines_per_frame:
+        if cast[uint32](display_line) == lines_per_frame:
             display_line = 0
             if interlaced:
                 if field == Field.Top:

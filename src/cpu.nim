@@ -305,7 +305,7 @@ proc op_add() =
     try:
         let v = s + t
         set_reg(d, cast[uint32](v))
-    except OverflowDefect:
+    except:
         exception(Exception.Overflow)
 
 
