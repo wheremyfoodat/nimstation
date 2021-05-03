@@ -19,4 +19,4 @@ jobs:
 
       # Runs a single command using the runners shell
       - name: Install dependencies and run
-        run: sudo apt-get install libsfml-dev libcsfml-dev nim && nim compile -d:release --run --debugger:native src/emulator.nim
+        run: sudo apt-get install libsfml-dev libcsfml-dev nim && nimble install csfml && nim compile -d:release --run --debugger:native src/emulator.nim
