@@ -320,10 +320,10 @@ proc i64_to_otz(average: int64): uint16 =
 proc mac_to_color(mac: int32, which: uint8): uint8 =
     let c = mac shr 4
     if c < 0:
-        set_flag(21 - which)
+        set_flag(21'u8 - which)
         return 0'u8
     elif c > 0xFF:
-        set_flag(21 - which)
+        set_flag(21'u8 - which)
         return 0xFF'u8
     else:
         return cast[uint8](c)
