@@ -1,5 +1,5 @@
 # nimstation
-[![CI](https://github.com/wheremyfoodat/nimstation/actions/workflows/build.yml/badge.svg)](https://github.com/wheremyfoodat/nimstation/actions/workflows/build.yml)
+[![Automated Build](https://github.com/wheremyfoodat/nimstation/actions/workflows/build.yml/badge.svg)](https://github.com/wheremyfoodat/nimstation/actions/workflows/build.yml)
 
  A PSX emulator written in Nim
 
